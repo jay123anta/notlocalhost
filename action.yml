@@ -1,0 +1,213 @@
+name: notlocalhost
+description: >-
+  Predict what breaks when your dev server moves to a real HTTPS origin.
+  Cookies, CORS, secure contexts, mixed content and leaked localhost URLs.
+author: Jayanta Kr. Nath
+
+branding:
+  icon: alert-triangle
+  color: orange
+
+inputs:
+  url:
+    description: The running dev server to analyze, e.g. http://localhost:3000
+    required: true
+  flow:
+    description: >-
+      Path to a Playwright flow script that signs in. Strongly recommended --
+      the cookies that matter usually appear only after authentication, and
+      finding coverage equals run coverage.
+    required: false
+  fail-on:
+    description: 'Fail the step at this severity: will-break | may-break | info | none'
+    required: false
+    default: will-break
+  domain:
+    description: Registrable domain to assume for the deployed app.
+    required: false
+    default: example.com
+  cross-site:
+    description: Assume each local port becomes a separate site rather than a subdomain.
+    required: false
+    default: 'false'
+  map:
+    description: >-
+      Newline-separated local=host pins, e.g.
+      "localhost:3000=app.acme.com\nlocalhost:8000=api.acme.com"
+    required: false
+  timeout:
+    description: Navigation timeout in milliseconds.
+    required: false
+    default: '30000'
+  flow-timeout:
+    description: Budget for the flow script in milliseconds.
+    required: false
+    default: '60000'
+  settle:
+    description: Quiet time after load before collecting, in milliseconds.
+    required: false
+    default: '1200'
+  report-path:
+    description: Where to write the single-file HTML report.
+    required: false
+    default: notlocalhost-report.html
+  json-path:
+    description: Where to write the schema-versioned JSON document.
+    required: false
+    default: notlocalhost-report.json
+  upload-artifact:
+    description: Upload the HTML and JSON reports as a workflow artifact.
+    required: false
+    default: 'true'
+  artifact-name:
+    description: Name for the uploaded artifact.
+    required: false
+    default: notlocalhost-report
+  job-summary:
+    description: Write a findings summary to the GitHub job summary page.
+    required: false
+    default: 'true'
+  version:
+    description: Version of notlocalhost to run (npm semver range or dist-tag).
+    required: false
+    default: latest
+
+outputs:
+  will-break:
+    description: Number of will-break findings.
+    value: ${{ steps.run.outputs.will-break }}
+  may-break:
+    description: Number of may-break findings.
+    value: ${{ steps.run.outputs.may-break }}
+  info:
+    description: Number of info findings.
+    value: ${{ steps.run.outputs.info }}
+  exit-code:
+    description: The analyzer exit code (0 clean, 1 findings, 2 unreachable, 5 tool failure, 64 usage).
+    value: ${{ steps.run.outputs.exit-code }}
+  report-path:
+    description: Path to the generated HTML report.
+    value: ${{ steps.run.outputs.report-path }}
+  json-path:
+    description: Path to the generated JSON document.
+    value: ${{ steps.run.outputs.json-path }}
+
+runs:
+  using: composite
+  steps:
+    # GitHub-hosted runners ship Chrome on ubuntu, macos and windows images, so
+    # nothing is downloaded here. On a self-hosted runner without one, set
+    # NOTLOCALHOST_BROWSER_PATH in the job environment.
+    - name: Run notlocalhost
+      id: run
+      shell: bash
+      env:
+        NLH_URL: ${{ inputs.url }}
+        NLH_FLOW: ${{ inputs.flow }}
+        NLH_FAIL_ON: ${{ inputs.fail-on }}
+        NLH_DOMAIN: ${{ inputs.domain }}
+        NLH_CROSS_SITE: ${{ inputs.cross-site }}
+        NLH_MAP: ${{ inputs.map }}
+        NLH_TIMEOUT: ${{ inputs.timeout }}
+        NLH_FLOW_TIMEOUT: ${{ inputs.flow-timeout }}
+        NLH_SETTLE: ${{ inputs.settle }}
+        NLH_REPORT: ${{ inputs.report-path }}
+        NLH_JSON: ${{ inputs.json-path }}
+        NLH_VERSION: ${{ inputs.version }}
+      run: |
+        set -o pipefail
+
+        args=("$NLH_URL")
+        args+=(--fail-on "$NLH_FAIL_ON")
+        args+=(--domain "$NLH_DOMAIN")
+        args+=(--timeout "$NLH_TIMEOUT")
+        args+=(--flow-timeout "$NLH_FLOW_TIMEOUT")
+        args+=(--settle "$NLH_SETTLE")
+        args+=(--html "$NLH_REPORT")
+        args+=(--json "$NLH_JSON")
+
+        [ -n "$NLH_FLOW" ] && args+=(--flow "$NLH_FLOW")
+        [ "$NLH_CROSS_SITE" = "true" ] && args+=(--cross-site)
+
+        if [ -n "$NLH_MAP" ]; then
+          while IFS= read -r line; do
+            [ -n "$line" ] && args+=(--map "$line")
+          done <<< "$NLH_MAP"
+        fi
+
+        if [ -z "$NLH_FLOW" ]; then
+          echo "::notice title=No flow script::Only the logged-out page will be exercised. The cookies that matter usually appear after login; pass the 'flow' input to cover them."
+        fi
+
+        set +e
+        npx --yes "notlocalhost@$NLH_VERSION" "${args[@]}"
+        code=$?
+        set -e
+
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        echo "report-path=$NLH_REPORT" >> "$GITHUB_OUTPUT"
+        echo "json-path=$NLH_JSON" >> "$GITHUB_OUTPUT"
+
+        # 2 and above mean nothing was analyzed, so there are no counts to read.
+        if [ -f "$NLH_JSON" ]; then
+          node -e '
+            const fs = require("fs");
+            const doc = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            const out = process.env.GITHUB_OUTPUT;
+            for (const [k, v] of Object.entries(doc.counts)) fs.appendFileSync(out, `${k}=${v}\n`);
+          ' "$NLH_JSON"
+        fi
+
+        case "$code" in
+          2)  echo "::error title=Target unreachable::notlocalhost could not load $NLH_URL. Is the dev server running and ready?" ;;
+          5)  echo "::error title=notlocalhost failed::No usable browser, or an internal error. See the log above." ;;
+          64) echo "::error title=Bad arguments::Check the inputs passed to the notlocalhost action." ;;
+        esac
+
+        exit $code
+
+    - name: Write job summary
+      if: ${{ always() && inputs.job-summary == 'true' }}
+      shell: bash
+      env:
+        NLH_JSON: ${{ inputs.json-path }}
+      run: |
+        [ -f "$NLH_JSON" ] || exit 0
+        node -e '
+          const { readFileSync } = require("fs");
+          const doc = JSON.parse(readFileSync(process.argv[1], "utf8"));
+          const c = doc.counts;
+          const lines = [];
+          lines.push(`## notlocalhost \`${doc.target.url}\``, "");
+          lines.push("| | Will break | May break | Info |", "|---|---|---|---|");
+          lines.push(`| findings | **${c["will-break"]}** | ${c["may-break"]} | ${c.info} |`, "");
+          if (!doc.coverage.flow) {
+            lines.push("> Only the logged-out page was exercised. Pass the `flow` input to cover post-login cookies.", "");
+          }
+          for (const sev of ["will-break", "may-break"]) {
+            const g = doc.findings.filter((f) => f.severity === sev);
+            if (!g.length) continue;
+            lines.push(`### ${sev === "will-break" ? "Will break" : "May break"}`, "");
+            for (const f of g) {
+              lines.push(`- **${f.title.replace(/([|`*_])/g, "\\$1")}** \`${f.id}\``);
+              const first = String(f.summary).split("\n\n")[0];
+              if (first) lines.push(`  ${first.replace(/([|`*_])/g, "\\$1")}`);
+            }
+            lines.push("");
+          }
+          lines.push("<details><summary>What this does not tell you</summary>", "");
+          for (const l of doc.limitations) lines.push(`- ${l}`);
+          lines.push("", "</details>");
+          console.log(lines.join("\n"));
+        ' "$NLH_JSON" >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Upload report
+      if: ${{ always() && inputs.upload-artifact == 'true' }}
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: |
+          ${{ inputs.report-path }}
+          ${{ inputs.json-path }}
+        if-no-files-found: ignore
+        retention-days: 30

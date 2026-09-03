@@ -1,0 +1,170 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / node ${{ matrix.node }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        node: ['22']
+        include:
+          # The oldest supported Node, checked on one platform so the engines
+          # field in package.json stays honest. The floor is 20 because
+          # playwright-core declares engines >=20.
+          - os: ubuntu-latest
+            node: '20'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # The end-to-end suite drives a real browser. GitHub's images ship Chrome,
+      # but pinning it here means a change to the image cannot silently turn the
+      # e2e tests into skips.
+      - name: Install Chrome
+        uses: browser-actions/setup-chrome@v1
+        id: chrome
+        with:
+          chrome-version: stable
+
+      - run: npm ci
+
+      - name: Report the browser that will be used
+        shell: bash
+        env:
+          NOTLOCALHOST_BROWSER_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: node bin/notlocalhost.js --list-browsers
+
+      - name: Lint and invariants
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm run test:unit
+
+      - name: End-to-end tests
+        env:
+          NOTLOCALHOST_BROWSER_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: npm run test:e2e
+
+      # The e2e suite skips itself when no browser is present, which would let a
+      # broken browser lookup pass CI silently. Fail loudly instead.
+      - name: Assert the e2e suite actually ran
+        shell: bash
+        env:
+          NOTLOCALHOST_BROWSER_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          out=$(npm run --silent test:e2e 2>&1 || true)
+          if echo "$out" | grep -qi "no Chrome, Chromium or Edge installed"; then
+            echo "::error::The end-to-end suite skipped because no browser was found. CI must run it."
+            exit 1
+          fi
+          echo "$out" | grep -E "^# (tests|pass|fail)"
+
+      - name: Verify the RFC claims against this runner's browser
+        env:
+          NOTLOCALHOST_BROWSER_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: npm run evidence
+
+  gate:
+    name: ship gate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: browser-actions/setup-chrome@v1
+        id: chrome
+        with:
+          chrome-version: stable
+
+      - name: Pack the tarball a user would install
+        id: pack
+        shell: bash
+        run: |
+          npm install --no-audit --no-fund
+          file=$(npm pack --silent)
+          echo "tarball=$PWD/$file" >> "$GITHUB_OUTPUT"
+          echo "package size: $(du -k "$file" | cut -f1) KB"
+
+      # The npx promise: cold cache to finished analysis in under 30 seconds.
+      - name: Cold-cache install and full analysis, timed
+        shell: bash
+        env:
+          NOTLOCALHOST_BROWSER_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          set -e
+          node test/fixtures/lying-app.mjs --port 3000 --api-port 4000 --quiet &
+          fixture=$!
+          trap 'kill $fixture 2>/dev/null || true' EXIT
+
+          # Wait for the fixture rather than sleeping a fixed amount.
+          for _ in $(seq 1 40); do
+            if node -e 'require("net").connect(3000,"127.0.0.1").on("connect",()=>process.exit(0)).on("error",()=>process.exit(1))'; then break; fi
+            sleep 0.25
+          done
+
+          work=$(mktemp -d)
+          cache=$(mktemp -d)
+          cd "$work"
+          echo '{"name":"coldtest","private":true}' > package.json
+
+          start=$(node -e 'console.log(Date.now())')
+          npm install --cache "$cache" --no-audit --no-fund "${{ steps.pack.outputs.tarball }}" > /dev/null
+          ./node_modules/.bin/notlocalhost http://localhost:3000 --no-html --quiet --fail-on none
+          end=$(node -e 'console.log(Date.now())')
+
+          elapsed=$(( end - start ))
+          size=$(du -sk node_modules | cut -f1)
+          echo "cold install + analysis: ${elapsed} ms"
+          echo "installed size: ${size} KB"
+          echo "- cold npx: **${elapsed} ms**, install **${size} KB**" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$elapsed" -gt 30000 ]; then
+            echo "::error::Cold npx took ${elapsed} ms, over the 30 s budget."
+            exit 1
+          fi
+
+      - name: The HTML report must open from the filesystem with no server
+        shell: bash
+        env:
+          NOTLOCALHOST_BROWSER_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: npm run test:report
+
+      - name: Exit codes must be exactly as documented
+        shell: bash
+        env:
+          NOTLOCALHOST_BROWSER_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          set +e
+          node bin/notlocalhost.js --help > /dev/null;                        [ $? -eq 0 ]  || { echo "--help should exit 0"; exit 1; }
+          node bin/notlocalhost.js --fail-on bogus > /dev/null 2>&1;          [ $? -eq 64 ] || { echo "bad args should exit 64"; exit 1; }
+          node bin/notlocalhost.js http://127.0.0.1:39399 --no-html --timeout 5000 > /dev/null 2>&1
+          [ $? -eq 2 ] || { echo "unreachable should exit 2"; exit 1; }
+          echo "exit codes 0, 64 and 2 confirmed"

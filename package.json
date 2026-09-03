@@ -1,0 +1,58 @@
+{
+  "name": "notlocalhost",
+  "version": "0.1.0",
+  "description": "Your localhost is lying to you. This tells you exactly how. Predicts what breaks when your dev server moves to a real HTTPS origin.",
+  "keywords": [
+    "localhost",
+    "cookies",
+    "samesite",
+    "secure-context",
+    "mixed-content",
+    "cors",
+    "https",
+    "devtools",
+    "ci",
+    "static-analysis"
+  ],
+  "homepage": "https://github.com/jay123anta/notlocalhost#readme",
+  "bugs": "https://github.com/jay123anta/notlocalhost/issues",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jay123anta/notlocalhost.git"
+  },
+  "license": "MIT",
+  "author": "Jayanta Kr. Nath",
+  "type": "module",
+  "bin": {
+    "notlocalhost": "bin/notlocalhost.js"
+  },
+  "exports": {
+    ".": "./src/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "test": "node --test test/unit.test.js test/e2e.test.js test/report.test.js",
+    "lint": "node scripts/syntax-check.mjs",
+    "evidence": "node evidence/repro-port-sharing.mjs",
+    "test:unit": "node --test test/unit.test.js",
+    "test:e2e": "node --test test/e2e.test.js",
+    "fixture": "node test/fixtures/lying-app.mjs",
+    "test:report": "node --test test/report.test.js"
+  },
+  "dependencies": {
+    "playwright-core": "^1.56.0"
+  },
+  "devDependencies": {},
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -1,0 +1,57 @@
+name: False positive
+description: A finding that is not actually a problem
+labels: [false-positive]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        False positives are the most damaging bug this project can have. A tool
+        that cries wolf gets muted, and then it is worth nothing at all. These
+        reports are treated as high priority.
+
+  - type: input
+    id: rule
+    attributes:
+      label: Rule id
+      description: The line under the finding title, e.g. `leak.api-base`.
+      placeholder: cookie.two-auth-paths-source
+    validations:
+      required: true
+
+  - type: textarea
+    id: finding
+    attributes:
+      label: The finding as printed
+      description: Paste the whole finding, including its evidence block.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it is wrong
+      description: >-
+        What does the code actually do? If the evidence quotes a line, what is
+        that line really for?
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Smallest reproduction
+      description: >-
+        Ideally a few lines that could be added to `test/fixtures/lying-app.mjs`
+        or a unit test. If you cannot reduce it, the framework and version is
+        still useful.
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: notlocalhost version
+      placeholder: "0.1.0"
+    validations:
+      required: true
