@@ -113,16 +113,31 @@ jobs:
           artifact-name: action-selftest-report
 
       - name: The flow must have revealed post-login cookies
+        shell: bash
         run: |
+          json="${{ steps.nlh.outputs.json-path }}"
           echo "exit-code : ${{ steps.nlh.outputs.exit-code }}"
-          test -f "${{ steps.nlh.outputs.json-path }}" || { echo "::error::no JSON document written"; exit 1; }
+          echo "json-path : $json"
+          ls -la "$json" 2>/dev/null || { echo "::error title=No document::The action wrote no JSON to '$json'"; exit 1; }
+
+          # readFileSync with an explicit path, not require(): a bare filename
+          # with no leading ./ is a package specifier to require(), not a file.
           node -e '
-            const doc = require(process.argv[1]);
-            if (!doc.coverage.flow?.ok) { console.error("::error::the flow input did not run"); process.exit(1); }
+            const { readFileSync } = require("node:fs");
+            const { resolve } = require("node:path");
+            const p = resolve(process.argv[1]);
+            let doc;
+            try { doc = JSON.parse(readFileSync(p, "utf8")); }
+            catch (e) { console.log(`::error title=Unreadable::${p}: ${e.message}`); process.exit(1); }
+
+            if (!doc.coverage.flow) { console.log("::error title=Flow ignored::The flow input never reached the CLI"); process.exit(1); }
+            if (!doc.coverage.flow.ok) { console.log(`::error title=Flow failed::${doc.coverage.flow.error ?? "unknown"}`); process.exit(1); }
+
             const names = doc.findings.find(f => f.id === "cookie.inventory")?.evidence.map(e => e.label) ?? [];
+            console.log("cookies seen:", names.join(", ") || "(none)");
             if (!names.includes("connect.sid")) {
-              console.error("::error::post-login cookies missing; the flow input is not being passed through");
+              console.log("::error title=No post-login cookies::connect.sid absent, so the flow did not authenticate");
               process.exit(1);
             }
-            console.log("flow ran, cookies seen:", names.join(", "));
-          ' "${{ steps.nlh.outputs.json-path }}"
+            console.log("flow ran and revealed post-login cookies");
+          ' "$json"
