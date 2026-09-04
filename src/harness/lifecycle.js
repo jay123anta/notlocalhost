@@ -233,11 +233,13 @@ export async function down(opts = {}) {
 
   // ---- process -------------------------------------------------------------
   if (state.running?.pid) {
-    const killed = stopProcess(state.running.pid);
+    const killed = await stopProcess(state.running.pid);
     steps.push({
       what: 'stop the proxy',
       ok: killed.ok,
-      detail: killed.ok ? `stopped pid ${state.running.pid}` : `could not stop pid ${state.running.pid}: ${killed.error}`,
+      detail: killed.ok
+        ? `stopped pid ${state.running.pid}${killed.escalated ? ' (it ignored SIGTERM and was killed)' : ''}`
+        : `could not stop pid ${state.running.pid}: ${killed.error}`,
     });
     log(killed.ok ? 'proxy stopped' : `proxy could not be stopped: ${killed.error}`);
   }
@@ -332,8 +334,14 @@ export function isAlive(pid) {
  * A process that is already gone counts as stopped -- the goal is that it is
  * not running, not that we were the one to end it.
  */
-export function stopProcess(pid) {
+export async function stopProcess(pid, opts = {}) {
+  const { graceMs = 5000, killMs = 3000 } = opts;
   if (!isAlive(pid)) return { ok: true, alreadyGone: true };
+
+  // A signal is a request, not an event. On POSIX the process is still alive
+  // for as long as it takes to handle SIGTERM and exit, so checking
+  // immediately reports failure for a shutdown that is merely in progress.
+  // Windows hides this because taskkill /F terminates before it returns.
   try {
     if (OS === 'win32') {
       execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', timeout: 20_000, windowsHide: true });
@@ -344,7 +352,29 @@ export function stopProcess(pid) {
     if (!isAlive(pid)) return { ok: true, alreadyGone: true };
     return { ok: false, error: err.message };
   }
-  return { ok: !isAlive(pid), error: isAlive(pid) ? 'still running after the stop signal' : undefined };
+
+  if (await waitForExit(pid, graceMs)) return { ok: true };
+
+  // It asked nicely and was ignored. Escalate rather than report a failure the
+  // caller can do nothing about.
+  try {
+    if (OS !== 'win32') process.kill(pid, 'SIGKILL');
+  } catch {
+    /* it may have exited between the check and the signal */
+  }
+  if (await waitForExit(pid, killMs)) return { ok: true, escalated: true };
+
+  return { ok: false, error: `pid ${pid} is still running after SIGTERM and SIGKILL` };
+}
+
+/** Poll until the process is gone, or the budget runs out. */
+async function waitForExit(pid, budgetMs, stepMs = 50) {
+  const deadline = Date.now() + budgetMs;
+  while (Date.now() < deadline) {
+    if (!isAlive(pid)) return true;
+    await new Promise((r) => setTimeout(r, stepMs));
+  }
+  return !isAlive(pid);
 }
 
 export { previewBlock, caRootPath, describeCertificate };

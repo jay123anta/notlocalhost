@@ -79,7 +79,7 @@ before(async () => {
 
 after(async () => {
   const state = work ? readState(work) : null;
-  if (state?.running?.pid) stopProcess(state.running.pid);
+  if (state?.running?.pid) await stopProcess(state.running.pid);
   if (upstream) await new Promise((r) => upstream.close(r));
   if (work) rmSync(work, { recursive: true, force: true });
 });
@@ -268,10 +268,33 @@ describe('up is idempotent and refuses to double-start', { skip }, () => {
     }
   });
 
-  test('stopping a process that is already gone counts as stopped', () => {
+  test('stopping a process that is already gone counts as stopped', async () => {
     // The goal is that it is not running, not that we were the one to end it.
-    assert.equal(stopProcess(0).ok, true);
-    assert.equal(stopProcess(999_999).ok, true);
+    assert.equal((await stopProcess(0)).ok, true);
+    assert.equal((await stopProcess(999_999)).ok, true);
+  });
+
+  test('a process that ignores SIGTERM is escalated rather than reported as a failure', async () => {
+    // Found on Linux: a signal is a request, not an event. Checking liveness
+    // immediately after sending one reports failure for a shutdown that is
+    // merely in progress.
+    const { spawn } = await import('node:child_process');
+    const child = spawn(
+      process.execPath,
+      ['-e', 'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000);'],
+      { stdio: 'ignore' },
+    );
+    await new Promise((r) => setTimeout(r, 300));
+    try {
+      const result = await stopProcess(child.pid, { graceMs: 600, killMs: 3000 });
+      assert.equal(result.ok, true, result.error);
+      if (process.platform !== 'win32') {
+        assert.equal(result.escalated, true, 'SIGTERM was ignored, so it must have escalated');
+      }
+      assert.equal(isAlive(child.pid), false);
+    } finally {
+      try { child.kill('SIGKILL'); } catch { /* already gone */ }
+    }
   });
 });
 
