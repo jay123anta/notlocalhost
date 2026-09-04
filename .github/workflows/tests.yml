@@ -2,7 +2,7 @@ name: tests
 
 on:
   push:
-    branches: [main]
+    branches: [main, stage-2-harness]
   pull_request:
   workflow_dispatch:
 
@@ -253,3 +253,82 @@ jobs:
           node bin/notlocalhost.js http://127.0.0.1:39399 --no-html --timeout 5000 > /dev/null 2>&1
           [ $? -eq 2 ] || { echo "unreachable should exit 2"; exit 1; }
           echo "exit codes 0, 64 and 2 confirmed"
+
+  # The Stage 2 gate: init, up, a real HTTPS request, down, machine unchanged.
+  # Run on every platform, because the last two bugs here were ones a single
+  # operating system hid completely.
+  harness:
+    name: harness (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+
+      # The lifecycle suite skips itself when no Caddy is present, so fetching
+      # one is what makes the gate run at all rather than silently pass.
+      - name: Fetch Caddy, verified against its published digest
+        shell: bash
+        run: |
+          node --input-type=module -e '
+            const { resolveCaddy } = await import("./src/harness/caddy.js");
+            const r = await resolveCaddy({ log: (m) => console.log(m) });
+            console.log(`${r.path}  (${r.source})`);
+          '
+
+      - name: Every harness suite, asserting each one actually ran
+        shell: bash
+        run: |
+          set -uo pipefail
+          failed=0
+
+          run_suite () {
+            local name="$1" file="$2" expect="$3"
+            local out code ran
+            out=$(node --test "$file" 2>&1); code=$?
+            ran=$(echo "$out" | grep -E "^# tests " | grep -oE "[0-9]+" | head -1); ran=${ran:-0}
+
+            echo "$name: $(echo "$out" | grep -E '^# (tests|pass|fail|skipped)' | tr '\n' ' ')"
+
+            # A suite that ran nothing proves nothing and exits 0 while doing
+            # it. Node reports a wholly-skipped describe as "# tests 0" rather
+            # than as a skip, which is how the gate once reported a pass
+            # without running.
+            if [ "$ran" -lt "$expect" ]; then
+              echo "::error title=$name proved nothing::expected at least $expect tests, $ran ran"
+              failed=1
+            fi
+            if echo "$out" | grep -q "^# skipped [1-9]"; then
+              echo "::error title=$name skipped tests::CI must run every test"
+              failed=1
+            fi
+            if [ "$code" -ne 0 ]; then
+              echo "$out" | grep -B2 -A12 "^    not ok" | head -60
+              echo "::error title=$name failed::see the output above"
+              failed=1
+            fi
+          }
+
+          run_suite compat    test/compat.test.js    25
+          run_suite harness   test/harness.test.js   50
+          run_suite lifecycle test/lifecycle.test.js 15
+
+          exit $failed
+
+      - name: doctor must report without changing anything
+        shell: bash
+        run: |
+          before=$(node -e 'const {createHash}=require("node:crypto");const {readFileSync}=require("node:fs");const p=process.platform==="win32"?process.env.SystemRoot+"\System32\drivers\etc\hosts":"/etc/hosts";try{console.log(createHash("sha256").update(readFileSync(p)).digest("hex"))}catch{console.log("unreadable")}')
+          node bin/notlocalhost.js doctor
+          after=$(node -e 'const {createHash}=require("node:crypto");const {readFileSync}=require("node:fs");const p=process.platform==="win32"?process.env.SystemRoot+"\System32\drivers\etc\hosts":"/etc/hosts";try{console.log(createHash("sha256").update(readFileSync(p)).digest("hex"))}catch{console.log("unreadable")}')
+          [ "$before" = "$after" ] || { echo "::error title=doctor mutated the machine::the hosts file changed"; exit 1; }
+          echo "hosts file unchanged by doctor"
