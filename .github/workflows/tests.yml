@@ -327,8 +327,41 @@ jobs:
       - name: doctor must report without changing anything
         shell: bash
         run: |
-          before=$(node -e 'const {createHash}=require("node:crypto");const {readFileSync}=require("node:fs");const p=process.platform==="win32"?process.env.SystemRoot+"\System32\drivers\etc\hosts":"/etc/hosts";try{console.log(createHash("sha256").update(readFileSync(p)).digest("hex"))}catch{console.log("unreadable")}')
+          digest () {
+            node --input-type=module -e '
+              import { createHash } from "node:crypto";
+              import { readFileSync } from "node:fs";
+              import { join } from "node:path";
+              const p = process.platform === "win32"
+                ? join(process.env.SystemRoot, "System32", "drivers", "etc", "hosts")
+                : "/etc/hosts";
+              try { console.log(createHash("sha256").update(readFileSync(p)).digest("hex")); }
+              catch { console.log("unreadable"); }
+            '
+          }
+
+          before=$(digest)
+          [ "$before" = "unreadable" ] && { echo "::error title=cannot read the hosts file::the check would prove nothing"; exit 1; }
+
+          # doctor exits 1 when it finds a blocking issue, exactly as the
+          # analyzer exits 1 on findings: someone will want to branch on it.
+          # A runner already holding port 80 is a fact about the machine, and
+          # reporting it is doctor working rather than failing. Only 0 and 1
+          # mean "it reported"; anything higher is a real fault.
+          set +e
           node bin/notlocalhost.js doctor
-          after=$(node -e 'const {createHash}=require("node:crypto");const {readFileSync}=require("node:fs");const p=process.platform==="win32"?process.env.SystemRoot+"\System32\drivers\etc\hosts":"/etc/hosts";try{console.log(createHash("sha256").update(readFileSync(p)).digest("hex"))}catch{console.log("unreadable")}')
-          [ "$before" = "$after" ] || { echo "::error title=doctor mutated the machine::the hosts file changed"; exit 1; }
-          echo "hosts file unchanged by doctor"
+          code=$?
+          set -e
+
+          after=$(digest)
+          if [ "$before" != "$after" ]; then
+            echo "::error title=doctor mutated the machine::the hosts file changed while doctor ran"
+            exit 1
+          fi
+          echo "hosts file unchanged by doctor ($before)"
+
+          if [ "$code" -gt 1 ]; then
+            echo "::error title=doctor failed::exit $code is a fault, not a finding"
+            exit 1
+          fi
+          echo "doctor exited $code"
