@@ -53,7 +53,14 @@ async function step(name, ms, log, fn) {
           `The browser stopped responding while trying to ${name}.\n\n` +
             `That call did not complete within ${Math.round(ms / 1000)}s. The browser launched, so this\n` +
             'is not a missing or wrong executable -- it started and then went quiet.\n\n' +
-            'Try --headed to watch it, or --browser-path to use a different build.',
+            'The usual cause is a build whose DevTools protocol does not match what\n' +
+            'playwright-core expects. Standalone Chromium snapshots drift from released\n' +
+            'Chrome, and the mismatch shows up here rather than at launch, because opening\n' +
+            'a context is bookkeeping while opening a page needs a renderer to attach.\n\n' +
+            'Point at a released Google Chrome, Chromium or Edge instead:\n' +
+            '  notlocalhost <url> --browser-path "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"\n' +
+            '  notlocalhost --list-browsers        to see what is installed\n\n' +
+            'Or run with --headed to watch what the browser actually does.',
         );
         err.code = 'BROWSER_UNRESPONSIVE';
         err.step = name;

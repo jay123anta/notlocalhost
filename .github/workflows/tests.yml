@@ -47,12 +47,28 @@ jobs:
         with:
           chrome-version: stable
 
+      # Prefer a released Google Chrome over a standalone Chromium snapshot.
+      # setup-chrome installs Chromium on macOS, and its DevTools protocol
+      # drifts from what playwright-core expects: the browser launches and a
+      # context opens, then creating a page never returns. Released Chrome is
+      # also what a developer actually has, which is the thing worth testing.
+      - name: Choose the browser
+        shell: bash
+        run: |
+          chrome_app="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+          if [ -x "$chrome_app" ]; then
+            picked="$chrome_app"
+          else
+            picked="${{ steps.chrome.outputs.chrome-path }}"
+          fi
+          echo "NOTLOCALHOST_BROWSER_PATH=$picked" >> "$GITHUB_ENV"
+          echo "using: $picked"
+          "$picked" --version || echo "(this build does not answer --version)"
+
       - run: npm ci
 
       - name: Report the browser that will be used
         shell: bash
-        env:
-          NOTLOCALHOST_BROWSER_PATH: ${{ steps.chrome.outputs.chrome-path }}
         run: node bin/notlocalhost.js --list-browsers
 
       - name: Lint and invariants
@@ -62,16 +78,12 @@ jobs:
         run: npm run test:unit
 
       - name: End-to-end tests
-        env:
-          NOTLOCALHOST_BROWSER_PATH: ${{ steps.chrome.outputs.chrome-path }}
         run: npm run test:e2e
 
       # The e2e suite skips itself when no browser is present, which would let a
       # broken browser lookup pass CI silently. Fail loudly instead.
       - name: Assert the e2e suite actually ran
         shell: bash
-        env:
-          NOTLOCALHOST_BROWSER_PATH: ${{ steps.chrome.outputs.chrome-path }}
         run: |
           out=$(npm run --silent test:e2e 2>&1 || true)
           if echo "$out" | grep -qi "no Chrome, Chromium or Edge installed"; then
@@ -81,8 +93,6 @@ jobs:
           echo "$out" | grep -E "^# (tests|pass|fail)"
 
       - name: Verify the RFC claims against this runner's browser
-        env:
-          NOTLOCALHOST_BROWSER_PATH: ${{ steps.chrome.outputs.chrome-path }}
         run: npm run evidence
 
   gate:
@@ -104,6 +114,20 @@ jobs:
         with:
           chrome-version: stable
 
+      # Same choice as the test job: a released Chrome over a Chromium snapshot.
+      - name: Choose the browser
+        shell: bash
+        run: |
+          chrome_app="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+          if [ -x "$chrome_app" ]; then
+            picked="$chrome_app"
+          else
+            picked="${{ steps.chrome.outputs.chrome-path }}"
+          fi
+          echo "NOTLOCALHOST_BROWSER_PATH=$picked" >> "$GITHUB_ENV"
+          echo "using: $picked"
+          "$picked" --version || echo "(this build does not answer --version)"
+
       - name: Pack the tarball a user would install
         id: pack
         shell: bash
@@ -118,10 +142,8 @@ jobs:
       # opaque non-zero exit from a timed step.
       - name: Resolve the browser
         shell: bash
-        env:
-          NOTLOCALHOST_BROWSER_PATH: ${{ steps.chrome.outputs.chrome-path }}
         run: |
-          echo "setup-chrome reported: $NOTLOCALHOST_BROWSER_PATH"
+          echo "browser chosen: $NOTLOCALHOST_BROWSER_PATH"
           [ -e "$NOTLOCALHOST_BROWSER_PATH" ] && echo "exists: yes" || echo "exists: NO"
           [ -f "$NOTLOCALHOST_BROWSER_PATH" ] && echo "kind: regular file"
           [ -d "$NOTLOCALHOST_BROWSER_PATH" ] && echo "kind: directory (a macOS bundle, or a folder)"
@@ -136,8 +158,6 @@ jobs:
       # The npx promise: cold cache to finished analysis in under 30 seconds.
       - name: Cold-cache install and full analysis, timed
         shell: bash
-        env:
-          NOTLOCALHOST_BROWSER_PATH: ${{ steps.chrome.outputs.chrome-path }}
         run: |
           set -e
           node test/fixtures/lying-app.mjs --port 3000 --api-port 4000 --quiet &
@@ -208,20 +228,14 @@ jobs:
       # drive every documented command, output format and exit code.
       - name: The packed artefact must work end to end
         shell: bash
-        env:
-          NOTLOCALHOST_BROWSER_PATH: ${{ steps.chrome.outputs.chrome-path }}
         run: npm run smoke
 
       - name: The HTML report must open from the filesystem with no server
         shell: bash
-        env:
-          NOTLOCALHOST_BROWSER_PATH: ${{ steps.chrome.outputs.chrome-path }}
         run: npm run test:report
 
       - name: Exit codes must be exactly as documented
         shell: bash
-        env:
-          NOTLOCALHOST_BROWSER_PATH: ${{ steps.chrome.outputs.chrome-path }}
         run: |
           set +e
           node bin/notlocalhost.js --help > /dev/null;                        [ $? -eq 0 ]  || { echo "--help should exit 0"; exit 1; }
