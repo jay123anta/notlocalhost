@@ -54,6 +54,7 @@ jobs:
       # also what a developer actually has, which is the thing worth testing.
       - name: Choose the browser
         shell: bash
+        timeout-minutes: 2
         run: |
           chrome_app="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
           if [ -x "$chrome_app" ]; then
@@ -63,7 +64,11 @@ jobs:
           fi
           echo "NOTLOCALHOST_BROWSER_PATH=$picked" >> "$GITHUB_ENV"
           echo "using: $picked"
-          "$picked" --version || echo "(this build does not answer --version)"
+          # Deliberately no `--version` here. On Windows chrome.exe does not
+          # print a version and exit; it hands off to an existing browser
+          # session and never returns, which hangs the step until the job
+          # timeout. The later diagnostic step probes the version through
+          # Node, which bounds it.
 
       - run: npm ci
 
@@ -117,6 +122,7 @@ jobs:
       # Same choice as the test job: a released Chrome over a Chromium snapshot.
       - name: Choose the browser
         shell: bash
+        timeout-minutes: 2
         run: |
           chrome_app="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
           if [ -x "$chrome_app" ]; then
@@ -126,7 +132,11 @@ jobs:
           fi
           echo "NOTLOCALHOST_BROWSER_PATH=$picked" >> "$GITHUB_ENV"
           echo "using: $picked"
-          "$picked" --version || echo "(this build does not answer --version)"
+          # Deliberately no `--version` here. On Windows chrome.exe does not
+          # print a version and exit; it hands off to an existing browser
+          # session and never returns, which hangs the step until the job
+          # timeout. The later diagnostic step probes the version through
+          # Node, which bounds it.
 
       - name: Pack the tarball a user would install
         id: pack
