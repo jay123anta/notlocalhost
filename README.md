@@ -285,8 +285,8 @@ Written before launch, and shipped inside every JSON document and HTML report
 rather than only living here.
 
 - **This predicts behaviour on a real HTTPS origin. It does not prove it.** The
-  only proof is serving the app from that origin. That is what stage 2 of this
-  project is for, and it does not exist yet.
+  only proof is serving the app from that origin, over HTTPS, on a real
+  hostname.
 - **It only observes code paths that actually execute during the run.** Coverage
   of findings equals coverage of the run, which is why `--flow` matters more
   than any individual rule.
@@ -320,11 +320,11 @@ run in CI, does not produce a diffable artifact, and requires you to already
 suspect the problem.
 
 **Why not mkcert plus Caddy?**
-That is a genuinely good setup and it is where this project is heading — see
-[Roadmap](#roadmap). But it is a fifteen-minute commitment involving a trusted
-root CA on your machine before you know whether you have a problem. This is a
-zero-setup diagnosis you run first. If it finds nothing, you have saved the
-fifteen minutes; if it finds something, you now have a reason.
+That is a genuinely good setup, and if you already run it you are ahead. But it
+is a fifteen-minute commitment that puts a trusted root CA on your machine,
+before you know whether you have a problem worth solving. This is a zero-setup
+diagnosis you run first. If it finds nothing, you have saved the fifteen
+minutes. If it finds something, you now have a reason to spend them.
 
 **Why not Herd, Valet, or Laragon?**
 Those are development *environments* — they manage PHP versions, databases, web
@@ -400,21 +400,14 @@ exact evidence, and a fix. A rule that cannot cite why it is `will-break` is
 
 ---
 
-## Roadmap
+## What it does not do to your machine
 
-Stage 1, the analyzer, is this. It is the whole product and it ships first.
+It installs no certificate, changes no DNS, binds no privileged port, and writes
+nothing outside the directory you run it in. It reads what your dev server
+serves over HTTP, exactly as a browser does, and writes the report you asked for.
 
-- **Stage 2 — the harness.** `notlocalhost init` / `up` / `down` / `doctor`:
-  serve your app from a real domain over real HTTPS locally, using Caddy and a
-  locally-trusted CA, so the predictions become observations. Opt-in, fully
-  reversible.
-- **Stage 3 — the parity diff.** Run the analyzer against localhost *and*
-  against the real origin, and diff them. Every prediction becomes confirmed,
-  refuted, or newly discovered.
-
-Stage 1 deliberately does none of that. It installs no certificate, changes no
-DNS, binds no privileged port, and writes nowhere outside the working directory.
-That constraint is the product, not a limitation.
+That constraint is the product, not a limitation. A diagnosis you can run
+without thinking about it is one you will actually run.
 
 ---
 

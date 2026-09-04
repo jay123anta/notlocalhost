@@ -187,7 +187,7 @@ export function cookieRules(ctx) {
         ],
         fix: [
           'Drop the Domain attribute locally: host-only is the only scope localhost can express.',
-          'To exercise a real parent-domain scope you need a real registrable domain. That is what `notlocalhost init` builds.',
+          'To exercise a real parent-domain scope at all you need a real registrable domain, served over HTTPS. There is no way to do it on localhost.',
           'Do not ship Domain=localhost. Make the production value configuration, not a constant.',
         ],
         refs: [REF.rfc6265Domain, REF.rfc6265Storage, REF.rfc6761],
@@ -468,7 +468,7 @@ function conditionalFlagFindings(cookies, capture) {
           { label: 'framework', value: s.framework },
         ],
         fix: [
-          'Serve the app over HTTPS locally so the framework takes its production branch. That is what stage 2 of this tool exists for.',
+          'Serve the app over HTTPS locally, on a real hostname, so the framework takes its production branch instead of its development one.',
           'Until then, treat any local session test as testing a different cookie than the one users get.',
         ],
         refs: [REF.rfc6265bisPrefixes],

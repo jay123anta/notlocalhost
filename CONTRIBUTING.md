@@ -50,9 +50,9 @@ fastest way for the next person to understand what you found.
   argument parser, no colour library, no test framework.
 - **No telemetry, ever.** Not opt-in, not anonymous, not "just a version check".
 - **Never modify the user's application.**
-- **Stage 1 stays zero-setup.** No certificate installs, no DNS changes, no
-  privileged ports, no writes outside the working directory. That constraint is
-  the product, not a limitation.
+- **It stays zero-setup.** No certificate installs, no DNS changes, no privileged
+  ports, no writes outside the working directory. That constraint is the product,
+  not a limitation.
 - **Honest limitations stay honest.** If a change narrows what a finding proves,
   update `LIMITATIONS` in `src/analyze.js` in the same commit.
 

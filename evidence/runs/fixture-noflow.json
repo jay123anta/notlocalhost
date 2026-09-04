@@ -4,8 +4,8 @@
     "name": "notlocalhost",
     "version": "0.1.0"
   },
-  "startedAt": "2026-09-03T20:20:33.299Z",
-  "finishedAt": "2026-09-03T20:20:37.078Z",
+  "startedAt": "2026-09-04T10:03:48.212Z",
+  "finishedAt": "2026-09-04T10:03:51.217Z",
   "target": {
     "url": "http://localhost:3000",
     "finalUrl": "http://localhost:3000/",
@@ -42,12 +42,13 @@
       5173,
       5432,
       8000,
+      8001,
       9000
     ],
     "portScanSkipped": false,
     "timing": {
-      "navigationMs": 399,
-      "totalMs": 3375
+      "navigationMs": 348,
+      "totalMs": 2773
     }
   },
   "counts": {
@@ -78,7 +79,7 @@
       ],
       "fix": [
         "Drop the Domain attribute locally: host-only is the only scope localhost can express.",
-        "To exercise a real parent-domain scope you need a real registrable domain. That is what `notlocalhost init` builds.",
+        "To exercise a real parent-domain scope at all you need a real registrable domain, served over HTTPS. There is no way to do it on localhost.",
         "Do not ship Domain=localhost. Make the production value configuration, not a constant."
       ],
       "refs": [
@@ -118,7 +119,7 @@
       ],
       "fix": [
         "Drop the Domain attribute locally: host-only is the only scope localhost can express.",
-        "To exercise a real parent-domain scope you need a real registrable domain. That is what `notlocalhost init` builds.",
+        "To exercise a real parent-domain scope at all you need a real registrable domain, served over HTTPS. There is no way to do it on localhost.",
         "Do not ship Domain=localhost. Make the production value configuration, not a constant."
       ],
       "refs": [
@@ -206,8 +207,8 @@
     {
       "id": "cookie.port-sharing-hazard",
       "severity": "will-break",
-      "title": "Cookies from localhost:3000 are also sent to 6 other servers on this machine",
-      "summary": "Cookies have no concept of a port. RFC 6265 section 8.5 states it plainly: \"cookies do not provide isolation by port\". The Set-Cookie grammar has no port attribute, and the browser keys the jar by host alone. So every app you run on 127.0.0.1 shares one cookie jar, regardless of port.\n\nTwo consequences, and teams hit both. First, your app can read -- and silently overwrite -- another local app's session cookie, including one from an unrelated project. Second, this is the opposite of your production topology, where app.example.com and api.example.com are separate hosts that share cookies only if you set Domain deliberately. Neither sharing behaviour you see locally is the one you ship.\n\nRight now this is not hypothetical: 127.0.0.1:3001, 127.0.0.1:4000, 127.0.0.1:5173, 127.0.0.1:5432, 127.0.0.1:8000, 127.0.0.1:9000 are listening and inside the same jar.",
+      "title": "Cookies from localhost:3000 are also sent to 7 other servers on this machine",
+      "summary": "Cookies have no concept of a port. RFC 6265 section 8.5 states it plainly: \"cookies do not provide isolation by port\". The Set-Cookie grammar has no port attribute, and the browser keys the jar by host alone. So every app you run on 127.0.0.1 shares one cookie jar, regardless of port.\n\nTwo consequences, and teams hit both. First, your app can read -- and silently overwrite -- another local app's session cookie, including one from an unrelated project. Second, this is the opposite of your production topology, where app.example.com and api.example.com are separate hosts that share cookies only if you set Domain deliberately. Neither sharing behaviour you see locally is the one you ship.\n\nRight now this is not hypothetical: 127.0.0.1:3001, 127.0.0.1:4000, 127.0.0.1:5173, 127.0.0.1:5432, 127.0.0.1:8000, 127.0.0.1:8001, 127.0.0.1:9000 are listening and inside the same jar.",
       "evidence": [
         {
           "label": "target",
@@ -219,7 +220,7 @@
         },
         {
           "label": "other listeners on this host",
-          "value": "127.0.0.1:3001, 127.0.0.1:4000, 127.0.0.1:5173, 127.0.0.1:5432, 127.0.0.1:8000, 127.0.0.1:9000"
+          "value": "127.0.0.1:3001\n127.0.0.1:4000\n127.0.0.1:5173\n127.0.0.1:5432\n127.0.0.1:8000\n127.0.0.1:8001\n127.0.0.1:9000"
         }
       ],
       "fix": [
@@ -908,6 +909,7 @@
     "A clean result means \"no findings in what was exercised\". It never means \"safe\".",
     "The deployment model is an assumption, printed above. Change it with --domain, --map and --cross-site if it does not match your topology.",
     "Source scanning reads what the dev server served. A production build may substitute different values, and code that did not load was not scanned.",
-    "Findings from a single page load do not cover other routes. Run the analyzer against the routes that matter."
+    "Findings from a single page load do not cover other routes. Run the analyzer against the routes that matter.",
+    "Two runs against the same app can differ. What a dev server serves changes between runs -- asset pipelines compile once and then cache, bundles get split differently, lazy routes load or do not. A finding that appears once and not again was real both times; the code that produced it simply did not get served the second time."
   ]
 }

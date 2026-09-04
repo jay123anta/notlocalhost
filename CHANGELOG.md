@@ -11,7 +11,7 @@ field is removed or retyped. Adding a field is not breaking.
 
 ## [0.1.0] - 2026-09-04
 
-First release. Stage 1: the analyzer.
+First release.
 
 ### Added
 
@@ -43,8 +43,8 @@ First release. Stage 1: the analyzer.
   is ever downloaded.
 - No telemetry, no account, and no network access beyond the target URL and a
   loopback port probe. Works offline.
-- Stage 1 installs no certificate, changes no DNS, binds no privileged port, and
-  writes nothing outside the working directory.
+- Installs no certificate, changes no DNS, binds no privileged port, and writes
+  nothing outside the working directory.
 
 [Unreleased]: https://github.com/jay123anta/notlocalhost/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/jay123anta/notlocalhost/releases/tag/v0.1.0
