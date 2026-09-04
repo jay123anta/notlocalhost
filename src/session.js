@@ -21,6 +21,54 @@ const DEFAULT_MAX_BODY_BYTES = 2 * 1024 * 1024;
 const DEFAULT_TOTAL_BODY_BUDGET = 24 * 1024 * 1024;
 
 /**
+ * How long any single browser-session setup call may take.
+ *
+ * Generous, because a cold browser on a loaded CI runner is genuinely slow, but
+ * finite, because the alternative is a process that waits forever and tells
+ * nobody why.
+ */
+const SETUP_TIMEOUT = 60_000;
+
+/**
+ * Run one named setup step under a deadline.
+ *
+ * The name is the point. A run that stops responding should say which call it
+ * was waiting on, so the next person does not have to bisect a session by
+ * pushing commits at CI.
+ *
+ * @template T
+ * @param {string} name
+ * @param {number} ms
+ * @param {(msg: string) => void} log
+ * @param {() => Promise<T>} fn
+ * @returns {Promise<T>}
+ */
+async function step(name, ms, log, fn) {
+  const started = Date.now();
+  let timer;
+  try {
+    const deadline = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        const err = new Error(
+          `The browser stopped responding while trying to ${name}.\n\n` +
+            `That call did not complete within ${Math.round(ms / 1000)}s. The browser launched, so this\n` +
+            'is not a missing or wrong executable -- it started and then went quiet.\n\n' +
+            'Try --headed to watch it, or --browser-path to use a different build.',
+        );
+        err.code = 'BROWSER_UNRESPONSIVE';
+        err.step = name;
+        reject(err);
+      }, ms);
+    });
+    const value = await Promise.race([fn(), deadline]);
+    log(`${name}: ok (${Date.now() - started}ms)`);
+    return value;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * @typedef {object} Capture
  * @property {string} targetUrl
  * @property {string} finalUrl
@@ -88,25 +136,33 @@ export async function runSession(opts) {
   const browser = await launchBrowser(chromium, browserInfo, headed);
 
   try {
-    const context = await browser.newContext({
-      ignoreHTTPSErrors: true,
-      // Deliberately a *fresh* jar. Cookies inherited from a real browser
-      // profile would make the run unreproducible.
-      serviceWorkers: 'allow',
-    });
+    // Every setup call below is bounded and named. Playwright enforces its own
+    // timeouts on page actions but not on session setup, so a browser that
+    // launches and then stops responding leaves these pending forever. Naming
+    // the step is what turns "it hung" into something fixable.
+    const context = await step('open a browser context', SETUP_TIMEOUT, log, () =>
+      browser.newContext({
+        ignoreHTTPSErrors: true,
+        // Deliberately a *fresh* jar. Cookies inherited from a real browser
+        // profile would make the run unreproducible.
+        serviceWorkers: 'allow',
+      }),
+    );
     context.setDefaultTimeout(timeout);
 
-    const page = await context.newPage();
+    const page = await step('open a page', SETUP_TIMEOUT, log, () => context.newPage());
 
     // ---- instrumentation must be installed before anything navigates -------
     const sinkReady = installSink(page, capture);
-    await page.addInitScript(instrumentPage);
-    await sinkReady;
+    await step('install the init script', SETUP_TIMEOUT, log, () => page.addInitScript(instrumentPage));
+    await step('install the instrumentation binding', SETUP_TIMEOUT, log, () => sinkReady);
 
-    const cdp = await context.newCDPSession(page);
+    const cdp = await step('attach the DevTools protocol session', SETUP_TIMEOUT, log, () =>
+      context.newCDPSession(page),
+    );
     const bodyState = { total: 0, pending: [] };
-    await attachNetwork(cdp, capture, bodyState, warnings);
-    await attachAudits(cdp, capture, warnings);
+    await step('enable network capture', SETUP_TIMEOUT, log, () => attachNetwork(cdp, capture, bodyState, warnings));
+    await step('enable the audits channel', SETUP_TIMEOUT, log, () => attachAudits(cdp, capture, warnings));
 
     page.on('console', (msg) => {
       if (msg.type() !== 'error' && msg.type() !== 'warning') return;

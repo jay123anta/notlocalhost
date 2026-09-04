@@ -418,6 +418,11 @@ function reportFailure(err, stderr, c, options) {
     if (err.hint) stderr.write(`\n${err.hint}\n`);
     return EXIT.TOOL_FAILURE;
   }
+  if (err.code === 'BROWSER_UNRESPONSIVE') {
+    stderr.write(`\n${c.red('browser stopped responding')}: ${err.message}\n`);
+    stderr.write(`\n  The step that hung was: ${c.bold(err.step)}\n`);
+    return EXIT.TOOL_FAILURE;
+  }
   if (err.code === 'BROWSER_LAUNCH') {
     // The diagnosis is the message; the forty lines of Chrome stack frames sit
     // behind --verbose, because leading with them helps nobody.
