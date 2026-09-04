@@ -113,6 +113,26 @@ jobs:
           echo "tarball=$PWD/$file" >> "$GITHUB_OUTPUT"
           echo "package size: $(du -k "$file" | cut -f1) KB"
 
+      # Resolve the browser before anything depends on it. A path that cannot be
+      # launched should say so here, by name, rather than surfacing later as an
+      # opaque non-zero exit from a timed step.
+      - name: Resolve the browser
+        shell: bash
+        env:
+          NOTLOCALHOST_BROWSER_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          echo "setup-chrome reported: $NOTLOCALHOST_BROWSER_PATH"
+          [ -e "$NOTLOCALHOST_BROWSER_PATH" ] && echo "exists: yes" || echo "exists: NO"
+          [ -f "$NOTLOCALHOST_BROWSER_PATH" ] && echo "kind: regular file"
+          [ -d "$NOTLOCALHOST_BROWSER_PATH" ] && echo "kind: directory (a macOS bundle, or a folder)"
+          node -e '
+            const { resolveBrowserExecutable, locateBrowser } = await import("./src/browser/locate.js");
+            const given = process.env.NOTLOCALHOST_BROWSER_PATH;
+            console.log("resolved to:", resolveBrowserExecutable(given) ?? "(nothing)");
+            const b = locateBrowser();
+            console.log("locateBrowser:", b.name, "->", b.path);
+          ' --input-type=module
+
       # The npx promise: cold cache to finished analysis in under 30 seconds.
       - name: Cold-cache install and full analysis, timed
         shell: bash
@@ -137,8 +157,30 @@ jobs:
 
           start=$(node -e 'console.log(Date.now())')
           npm install --cache "$cache" --no-audit --no-fund "${{ steps.pack.outputs.tarball }}" > /dev/null
+
+          # Capture the exit code rather than letting `set -e` abort with no
+          # explanation. The codes are documented and each one means something
+          # specific, so reporting it turns a silent CI failure into a diagnosis.
+          set +e
           ./node_modules/.bin/notlocalhost http://localhost:3000 --no-html --quiet --fail-on none
+          code=$?
+          set -e
           end=$(node -e 'console.log(Date.now())')
+
+          if [ "$code" -ne 0 ]; then
+            case "$code" in
+              2)  reason="target unreachable - the fixture server was not answering" ;;
+              5)  reason="tool failure - no usable browser, or an internal error" ;;
+              64) reason="usage error - the arguments above are wrong" ;;
+              *)  reason="unexpected exit code" ;;
+            esac
+            echo "::error title=Cold run failed::exit $code ($reason)"
+            echo "--- re-running verbosely for the reason ---"
+            ./node_modules/.bin/notlocalhost http://localhost:3000 --no-html --verbose --fail-on none || true
+            echo "--- what the fixture server is doing ---"
+            node -e 'require("net").connect(3000,"127.0.0.1").on("connect",()=>{console.log("port 3000 accepting connections");process.exit(0)}).on("error",e=>{console.log("port 3000:",e.message);process.exit(0)})'
+            exit 1
+          fi
 
           elapsed=$(( end - start ))
           size=$(du -sk node_modules | cut -f1)

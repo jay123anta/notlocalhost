@@ -1,4 +1,4 @@
-import { test, describe } from 'node:test';
+import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { parseSetCookie, splitSetCookieHeader, effectiveSameSite } from '../src/collect/cookie-parser.js';
@@ -20,7 +20,10 @@ import { scanLoopbackPorts } from '../src/collect/port-scan.js';
 import { finding, atOrAbove, sortFindings, severityRank } from '../src/rules/finding.js';
 import { parseArgs } from '../src/cli.js';
 import { _internal as sessionInternal } from '../src/session.js';
-import { locateBrowser } from '../src/browser/locate.js';
+import { locateBrowser, resolveBrowserExecutable } from '../src/browser/locate.js';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { EXIT } from '../src/exit-codes.js';
 import { shouldFail } from '../src/analyze.js';
 import { renderHtml } from '../src/report/html.js';
@@ -454,7 +457,74 @@ describe('browser naming', () => {
   });
 
   test('an explicit --browser-path that does not exist is a clear error', () => {
-    assert.throws(() => locateBrowser({ explicitPath: '/definitely/not/here/chrome' }), /does not point at a file/);
+    assert.throws(
+      () => locateBrowser({ explicitPath: '/definitely/not/here/chrome' }),
+      /does not point at a browser that can be launched/,
+    );
+  });
+
+  test('an unusable NOTLOCALHOST_BROWSER_PATH errors instead of being ignored', () => {
+    // Silently falling through to a filesystem scan turns "the path you gave me
+    // needs resolving" into "no browser found", which sends people looking in
+    // completely the wrong place.
+    assert.throws(() => withEnv('/definitely/not/here/chrome', () => locateBrowser()), /NOTLOCALHOST_BROWSER_PATH/);
+  });
+});
+
+describe('resolving a browser path', () => {
+  // macOS applications are bundles: directories ending in .app, with the real
+  // executable at Contents/MacOS/<name>. Pointing at the bundle is the natural
+  // thing to do on a Mac and must work.
+  let tmp;
+
+  before(() => {
+    tmp = mkdtempSync(join(tmpdir(), 'nlh-locate-'));
+  });
+  after(() => {
+    if (tmp) rmSync(tmp, { recursive: true, force: true });
+  });
+
+  const makeBundle = (bundleName, binaryName) => {
+    const bundle = join(tmp, bundleName);
+    const macos = join(bundle, 'Contents', 'MacOS');
+    mkdirSync(macos, { recursive: true });
+    const bin = join(macos, binaryName);
+    writeFileSync(bin, '#!/bin/sh\necho stub\n');
+    return { bundle, bin };
+  };
+
+  test('resolves into a macOS .app bundle', () => {
+    const { bundle, bin } = makeBundle('Google Chrome.app', 'Google Chrome');
+    assert.equal(resolveBrowserExecutable(bundle), bin);
+  });
+
+  test('prefers the binary named after the bundle when several exist', () => {
+    const { bundle, bin } = makeBundle('Chromium.app', 'Chromium');
+    writeFileSync(join(bundle, 'Contents', 'MacOS', 'crashpad_handler'), 'x');
+    assert.equal(resolveBrowserExecutable(bundle), bin);
+  });
+
+  test('resolves a plain directory containing a chrome binary', () => {
+    const dir = join(tmp, 'chrome-linux64');
+    mkdirSync(dir, { recursive: true });
+    const bin = join(dir, 'chrome');
+    writeFileSync(bin, 'x');
+    assert.equal(resolveBrowserExecutable(dir), bin);
+  });
+
+  test('passes a real executable through unchanged', () => {
+    assert.equal(resolveBrowserExecutable(process.execPath), process.execPath);
+  });
+
+  test('returns null for a directory with no browser in it', () => {
+    const dir = join(tmp, 'empty');
+    mkdirSync(dir, { recursive: true });
+    assert.equal(resolveBrowserExecutable(dir), null);
+  });
+
+  test('returns null for a path that does not exist', () => {
+    assert.equal(resolveBrowserExecutable(join(tmp, 'nope')), null);
+    assert.equal(resolveBrowserExecutable(''), null);
   });
 });
 

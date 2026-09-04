@@ -5,7 +5,7 @@
  * offline-capable, and a 150 MB browser download on first run is neither.
  * We look for what the developer already has: Chrome, Chromium, or Edge.
  */
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, statSync, readdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { homedir, platform } from 'node:os';
@@ -57,6 +57,13 @@ function candidates() {
       out.push({ path: `/Applications/${rel}`, channel, name });
       out.push({ path: join(home, 'Applications', rel), channel, name });
     }
+    // Standalone Chrome for Testing downloads, including the layout CI runners
+    // and the hosted tool cache use.
+    out.push({
+      path: '/Applications/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
+      channel: 'chrome',
+      name: 'Chrome for Testing',
+    });
     return out;
   }
 
@@ -121,6 +128,53 @@ function isExecutableFile(p) {
 }
 
 /**
+ * Resolve a path that names a browser into the binary that can actually be
+ * launched.
+ *
+ * On macOS an application is a bundle -- a directory ending in `.app` -- and
+ * the executable lives at `Contents/MacOS/<name>`. Pointing at the bundle is
+ * the natural thing for a Mac user to do, and it is what several tools hand
+ * back when asked where Chrome is. Treating a bundle as "not a browser"
+ * because it is not a regular file is wrong.
+ *
+ * @param {string} p
+ * @returns {string|null} A launchable executable, or null.
+ */
+export function resolveBrowserExecutable(p) {
+  if (!p) return null;
+  if (isExecutableFile(p)) return p;
+
+  let stat;
+  try {
+    stat = statSync(p);
+  } catch {
+    return null;
+  }
+  if (!stat.isDirectory()) return null;
+
+  // A macOS bundle keeps its executable here. Try it whether or not the path
+  // ends in `.app` -- some tools hand back the bundle without the suffix.
+  const macOSDir = join(p, 'Contents/MacOS');
+  try {
+    const entries = readdirSync(macOSDir);
+    // Prefer a name that looks like the bundle's own, then any executable.
+    const bundleName = p.replace(/\\/g, '/').split('/').pop()?.replace(/\.app$/, '');
+    const preferred = entries.find((e) => e === bundleName);
+    const chosen = preferred ?? entries.find((e) => isExecutableFile(join(macOSDir, e)));
+    if (chosen) return join(macOSDir, chosen);
+  } catch {
+    /* not a bundle */
+  }
+
+  // A plain directory: accept it if it obviously contains a Chromium binary.
+  for (const name of ['chrome', 'chrome.exe', 'chromium', 'chromium-browser', 'msedge', 'msedge.exe']) {
+    const candidate = join(p, name);
+    if (isExecutableFile(candidate)) return candidate;
+  }
+  return null;
+}
+
+/**
  * @param {{ explicitPath?: string, channel?: string }} [opts]
  * @returns {BrowserLocation}
  * @throws {Error & { code: 'NO_BROWSER' }}
@@ -128,18 +182,29 @@ function isExecutableFile(p) {
 export function locateBrowser(opts = {}) {
   const { explicitPath, channel } = opts;
 
-  if (explicitPath) {
-    if (!isExecutableFile(explicitPath)) {
-      const err = new Error(`--browser-path does not point at a file: ${explicitPath}`);
-      err.code = 'NO_BROWSER';
-      throw err;
-    }
-    return { path: explicitPath, channel: 'custom', name: nameFromPath(explicitPath) };
-  }
+  // An explicitly configured browser is honoured or reported. Quietly ignoring
+  // it and searching elsewhere produces a confusing "no browser found" when the
+  // real problem is that the given path needed resolving.
+  for (const [source, given] of [
+    ['--browser-path', explicitPath],
+    ['NOTLOCALHOST_BROWSER_PATH', process.env.NOTLOCALHOST_BROWSER_PATH],
+  ]) {
+    if (!given) continue;
+    const resolved = resolveBrowserExecutable(given);
+    if (resolved) return { path: resolved, channel: 'custom', name: nameFromPath(resolved) };
 
-  const envPath = process.env.NOTLOCALHOST_BROWSER_PATH;
-  if (envPath && isExecutableFile(envPath)) {
-    return { path: envPath, channel: 'custom', name: nameFromPath(envPath) };
+    const err = new Error(`${source} does not point at a browser that can be launched: ${given}`);
+    err.code = 'NO_BROWSER';
+    err.hint = [
+      'Tried, in order:',
+      `  the path itself                     ${given}`,
+      `  inside a macOS app bundle           ${given}/Contents/MacOS/...`,
+      `  a chrome/chromium/msedge binary in  ${given}/`,
+      '',
+      'Point at the executable directly. On macOS that is inside the bundle, e.g.',
+      '  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"',
+    ].join('\n');
+    throw err;
   }
 
   let list = candidates();
