@@ -114,6 +114,18 @@ Each code is translated into what actually went wrong and what to change.
 A CORS allowlist naming a loopback origin. It can only ever match a developer
 machine. **Found in:** the Vite + Express starter.
 
+### `cors.missing` — will-break when credentialed, else may-break
+Responses with no `Access-Control-Allow-Origin` on requests that become
+cross-origin after deployment. Correct today, because the request is
+same-origin and CORS does not apply -- the browser never asks. That is what
+makes it the failure localhost hides most completely: no warning, no console
+message, no failing test, because nothing is wrong yet. The header is absent
+precisely because it is not needed.
+
+Requires `--map /path=host` to model the split, since a dev-server proxy makes
+the API same-origin locally while production serves it from its own host.
+**Cite:** Fetch Standard, CORS protocol.
+
 ### `cors.wildcard` — info
 `Access-Control-Allow-Origin: *` on its own. Fine for public resources; worth
 knowing before the front-end changes origin.

@@ -50,6 +50,7 @@ export async function analyze(options) {
     domain = 'example.com',
     crossSite = false,
     map = {},
+    mapPaths = {},
     timeout,
     flowTimeout,
     settle,
@@ -91,7 +92,7 @@ export async function analyze(options) {
     log,
   });
 
-  const model = createDeploymentModel({ domain, crossSite, explicit: map });
+  const model = createDeploymentModel({ domain, crossSite, explicit: map, paths: mapPaths });
   const ctx = { capture, model, openPorts, targetUrl: url, platform: process.platform };
   const { findings, moduleErrors } = runRules(ctx);
 
@@ -126,6 +127,7 @@ export async function analyze(options) {
         ? 'Each distinct local port is assumed to become a distinct registrable domain (a genuinely cross-site topology).'
         : 'Each distinct local port is assumed to become a distinct subdomain of one registrable domain (cross-origin, same-site).',
       mapping: model.mapping,
+      pathMapping: mapPaths,
     },
     coverage: {
       flow: capture.flow ?? null,

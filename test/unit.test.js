@@ -173,6 +173,37 @@ describe('deployment model', () => {
     assert.equal(c.then.sameSite, false);
   });
 
+  test('a mapped path prefix becomes its own host', () => {
+    const m = createDeploymentModel({ domain: 'acme.com', paths: { '/api': 'api.acme.com' } });
+    assert.equal(m.project('http://localhost:3000/api/me'), 'https://api.acme.com/api/me');
+    assert.equal(m.project('http://localhost:3000/'), 'https://app.acme.com/');
+  });
+
+  test('a same-origin call to a mapped path becomes cross-origin after deployment', () => {
+    // Without this the CORS headers that localhost's origin masks stay
+    // invisible: the request is same-origin today, so nothing is missing yet.
+    const m = createDeploymentModel({ domain: 'acme.com', paths: { '/api': 'api.acme.com' } });
+    const c = classifyRequest('http://localhost:3000/', 'http://localhost:3000/api/me', m);
+    assert.equal(c.now.sameOrigin, true);
+    assert.equal(c.then.sameOrigin, false);
+    assert.equal(c.becomesCrossOrigin, true);
+  });
+
+  test('the longest matching path prefix wins', () => {
+    const m = createDeploymentModel({
+      domain: 'acme.com',
+      paths: { '/api': 'api.acme.com', '/api/v2': 'v2.acme.com' },
+    });
+    assert.equal(m.project('http://localhost:3000/api/v2/x'), 'https://v2.acme.com/api/v2/x');
+    assert.equal(m.project('http://localhost:3000/api/v1/x'), 'https://api.acme.com/api/v1/x');
+  });
+
+  test('a prefix matches a path segment, not a substring', () => {
+    const m = createDeploymentModel({ domain: 'acme.com', paths: { '/api': 'api.acme.com' } });
+    assert.equal(m.project('http://localhost:3000/api'), 'https://api.acme.com/api');
+    assert.equal(m.project('http://localhost:3000/apiary'), 'https://app.acme.com/apiary');
+  });
+
   test('an already-real origin is left alone', () => {
     const m = createDeploymentModel({ domain: 'acme.com' });
     assert.equal(m.project('https://cdn.example.com/x.js'), 'https://cdn.example.com/x.js');
@@ -467,6 +498,23 @@ describe('argument parsing', () => {
 
   test('--map rejects a value with no equals sign', () => {
     assert.equal(parseArgs(['http://x.test', '--map', 'nope']).ok, false);
+  });
+
+  test('--map with a leading slash maps a path prefix, not an origin', () => {
+    // This is how a dev-server proxy hiding a production split is modelled:
+    // /api is same-origin today and its own host after deployment.
+    const r = parseArgs(['http://x.test', '--map', '/api=api.acme.com', '--map', 'localhost:3000=app.acme.com']);
+    assert.deepEqual(r.options.mapPaths, { '/api': 'api.acme.com' });
+    assert.deepEqual(r.options.map, { 'localhost:3000': 'app.acme.com' });
+  });
+
+  test('a shell-mangled path is explained rather than silently accepted', () => {
+    // Git Bash and MSYS rewrite any argument starting with "/" into a Windows
+    // path. Accepting it would produce a confidently wrong analysis.
+    const r = parseArgs(['http://x.test', '--map', 'C:/Program Files/Git/api=api.acme.com']);
+    assert.equal(r.ok, false);
+    assert.match(r.error, /rewrote a leading slash/);
+    assert.match(r.error, /--map \/\/api=api\.acme\.com/, 'must show the exact working form');
   });
 
   test('--no-html disables the report', () => {
