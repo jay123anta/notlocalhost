@@ -24,6 +24,36 @@ export const COMMON_DEV_PORTS = [
 ];
 
 /**
+ * Ports that are usually the operating system rather than a dev server.
+ *
+ * On macOS Monterey and later, AirPlay Receiver binds 5000 and 7000 by default,
+ * so those are open on a great many Macs with nothing of the developer's
+ * running. Reporting them as "another app sharing your cookie jar" is true in
+ * the narrow sense and useless in practice -- and a finding that is always
+ * present is a finding people learn to skip past.
+ *
+ * These are still reported, but labelled, so the reader can tell a colleague's
+ * API server from a system service they cannot do anything about.
+ */
+export const LIKELY_SYSTEM_PORTS = {
+  darwin: {
+    5000: 'macOS AirPlay Receiver (ControlCenter), unless you are running something there',
+    7000: 'macOS AirPlay Receiver (ControlCenter), unless you are running something there',
+  },
+  win32: {},
+  linux: {},
+};
+
+/**
+ * @param {number} port
+ * @param {string} [os] Defaults to the current platform.
+ * @returns {string|null} An explanation when the port is probably a system service.
+ */
+export function describeSystemPort(port, os = process.platform) {
+  return LIKELY_SYSTEM_PORTS[os]?.[port] ?? null;
+}
+
+/**
  * @param {number} port
  * @param {string} host
  * @param {number} timeoutMs

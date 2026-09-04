@@ -298,7 +298,9 @@ export async function run(argv, io = {}) {
   let result;
   try {
     if (!quiet) stderr.write(`${c.dim(`  analyzing ${o.url} ...`)}\n`);
-    result = await analyze({
+    result = await withWatchdog(
+      o.timeout + o.flowTimeout + 120_000,
+      analyze({
       url: o.url,
       flow: o.flow,
       domain: o.domain,
@@ -310,9 +312,10 @@ export async function run(argv, io = {}) {
       headed: o.headed,
       noPortScan: o.noPortScan,
       browserPath: o.browserPath,
-      channel: o.channel,
-      log,
-    });
+        channel: o.channel,
+        log,
+      }),
+    );
   } catch (err) {
     return reportFailure(err, stderr, c, o);
   }
@@ -357,7 +360,50 @@ export async function run(argv, io = {}) {
   return shouldFail(result, o.failOn) ? EXIT.FINDINGS : EXIT.CLEAN;
 }
 
+/**
+ * Never let the process hang, and never let it give up silently.
+ *
+ * A promise that never settles while the event loop drains makes Node exit
+ * with code 13 and no output at all -- no error, no report, nothing to act on.
+ * That is the worst possible failure for a CLI, so the whole analysis runs
+ * under a deadline that turns it into a documented exit code and a message.
+ *
+ * The timer is unref'd so it never keeps a healthy run alive a moment longer
+ * than it needs.
+ *
+ * @template T
+ * @param {number} ms
+ * @param {Promise<T>} promise
+ * @returns {Promise<T>}
+ */
+async function withWatchdog(ms, promise) {
+  let timer;
+  const deadline = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const err = new Error(
+        `The analysis did not finish within ${Math.round(ms / 1000)}s and was stopped.\n\n` +
+          'This is a bug in notlocalhost, not in your application: a run should either\n' +
+          'produce findings or fail with a reason. Please report it, with the output of\n' +
+          '`notlocalhost --list-browsers` and your platform.',
+      );
+      err.code = 'WATCHDOG';
+      reject(err);
+    }, ms);
+    if (typeof timer.unref === 'function') timer.unref();
+  });
+
+  try {
+    return await Promise.race([promise, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function reportFailure(err, stderr, c, options) {
+  if (err.code === 'WATCHDOG') {
+    stderr.write(`\n${c.red('timed out')}: ${err.message}\n`);
+    return EXIT.TOOL_FAILURE;
+  }
   if (err.code === 'UNREACHABLE') {
     stderr.write(`\n${c.red('unreachable')}: ${err.message}\n`);
     stderr.write(

@@ -18,7 +18,7 @@ import {
 } from '../src/collect/conditional-flags.js';
 import { scanLoopbackPorts } from '../src/collect/port-scan.js';
 import { finding, atOrAbove, sortFindings, severityRank } from '../src/rules/finding.js';
-import { parseArgs } from '../src/cli.js';
+import { parseArgs, run } from '../src/cli.js';
 import { _internal as sessionInternal } from '../src/session.js';
 import { locateBrowser, resolveBrowserExecutable } from '../src/browser/locate.js';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
@@ -571,6 +571,27 @@ describe('browser launch failure diagnosis', () => {
     assert.match(out, /and a second useful line/);
     assert.ok(!out.includes('0x5fd78ab46b73'), 'stack frames must be dropped');
     assert.match(out, /--verbose/);
+  });
+});
+
+describe('the process never hangs silently', () => {
+  const sink = () => {
+    const chunks = [];
+    return { write: (s) => chunks.push(s), get text() { return chunks.join(''); }, isTTY: false, columns: 90 };
+  };
+
+  test('a run that never settles becomes a documented exit code, not Node exit 13', async () => {
+    // An unsettled promise with an empty event loop makes Node exit 13 with no
+    // output whatsoever: no error, no report, nothing to act on. A watchdog
+    // turns that into a tool failure with a message.
+    const stderr = sink();
+    const code = await run(
+      ['http://127.0.0.1:39396', '--no-html', '--timeout', '1', '--flow-timeout', '1'],
+      { stdout: sink(), stderr },
+    );
+    assert.notEqual(code, 13);
+    assert.ok([EXIT.UNREACHABLE, EXIT.TOOL_FAILURE].includes(code), `got exit ${code}`);
+    assert.ok(stderr.text.length > 0, 'a failure must always say something');
   });
 });
 

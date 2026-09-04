@@ -175,10 +175,20 @@ jobs:
               *)  reason="unexpected exit code" ;;
             esac
             echo "::error title=Cold run failed::exit $code ($reason)"
-            echo "--- re-running verbosely for the reason ---"
-            ./node_modules/.bin/notlocalhost http://localhost:3000 --no-html --verbose --fail-on none || true
-            echo "--- what the fixture server is doing ---"
-            node -e 'require("net").connect(3000,"127.0.0.1").on("connect",()=>{console.log("port 3000 accepting connections");process.exit(0)}).on("error",e=>{console.log("port 3000:",e.message);process.exit(0)})'
+
+            # Job logs need admin rights to read through the API, but annotations
+            # do not. Promote the diagnosis to annotations so the failure is
+            # legible to anyone who can see the run.
+            echo "--- re-running verbosely ---"
+            ./node_modules/.bin/notlocalhost http://localhost:3000 --no-html --verbose --fail-on none > verbose.txt 2>&1 || true
+            cat verbose.txt
+            while IFS= read -r line; do
+              [ -n "$line" ] && echo "::error title=Cold run detail::${line}"
+            done < <(grep -vE '^\s*$' verbose.txt | tail -20)
+
+            node -e 'require("net").connect(3000,"127.0.0.1").on("connect",()=>{console.log("fixture: port 3000 accepting connections");process.exit(0)}).on("error",e=>{console.log("fixture: port 3000 "+e.message);process.exit(0)})' > fixture.txt 2>&1 || true
+            cat fixture.txt
+            echo "::error title=Fixture state::$(cat fixture.txt | tr '\n' ' ')"
             exit 1
           fi
 
