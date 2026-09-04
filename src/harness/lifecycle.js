@@ -1,0 +1,350 @@
+/**
+ * init, up and down.
+ *
+ * Everything that touches the machine goes through here, and everything here
+ * is written so that `down` can undo it. Two rules shape the whole file:
+ *
+ *   Nothing happens without consent. `up` prints exactly what it will change,
+ *   in plain sentences, and stops unless the caller has agreed. It does not
+ *   prompt from inside a function that also acts -- the asking and the doing
+ *   are separate so both can be tested.
+ *
+ *   Every mutation is recorded before it is attempted and verified after it is
+ *   reversed. The ledger in state.json is what `down` reads, not the
+ *   configuration, because the two diverge the moment something fails halfway.
+ *
+ * Every path and port is injectable. That is not a testing convenience, it is
+ * what allows the whole lifecycle to be exercised against scratch files on
+ * unprivileged ports -- and a test suite that needed elevation would not be run.
+ */
+import { spawn, execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync, openSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { platform } from 'node:os';
+
+import {
+  harnessDir,
+  configPath,
+  defaultConfig,
+  readConfig,
+  writeConfig,
+  readState,
+  writeState,
+  clearState,
+  emptyState,
+  describeChanges,
+  TIERS,
+} from './config.js';
+import { renderCaddyfile, isUnmodified } from './caddyfile.js';
+import { resolveCaddy } from './caddy.js';
+import { trustCa, untrustCa, caRootPath, describeCertificate } from './trust.js';
+import { applyBlock, removeBlock, digestOfFile, previewBlock } from './hosts.js';
+import { hostsPath as defaultHostsPath } from './checks.js';
+import { scanLoopbackPorts, speaksHttp } from '../collect/port-scan.js';
+
+const OS = platform();
+
+// ---------------------------------------------------------------------- init
+
+/**
+ * Work out what the project looks like and write the configuration.
+ *
+ * Changes nothing outside the project directory. No certificate, no hosts
+ * entry, no process. `init` is a planning step on purpose: someone should be
+ * able to run it, read the plan, and walk away having altered nothing.
+ */
+export async function init(opts = {}) {
+  const {
+    cwd = process.cwd(),
+    tier = 'localhost',
+    project,
+    upstreams,
+    force = false,
+    log = () => {},
+  } = opts;
+
+  if (!TIERS[tier]) {
+    const e = new Error(`unknown tier "${tier}". Use "localhost" (no elevation) or "test" (a real registrable domain).`);
+    e.code = 'USAGE';
+    throw e;
+  }
+
+  const existing = existsSync(configPath(cwd)) ? readConfig(cwd) : null;
+  if (existing && !force) {
+    const e = new Error(
+      `This project is already initialised as ${existing.domain}.\n` +
+        'Run `notlocalhost init --force` to replace the configuration, or edit .notlocalhost/config.json.',
+    );
+    e.code = 'ALREADY_INITIALISED';
+    throw e;
+  }
+
+  // Find the dev servers that are actually running, rather than asking someone
+  // to remember their own port numbers.
+  let discovered = upstreams;
+  if (!discovered) {
+    const open = await scanLoopbackPorts().catch(() => []);
+
+    // An open port is not a web server. Databases, brokers and language
+    // servers all answer a connect, and offering to put a TLS proxy in front
+    // of PostgreSQL helps nobody. Only things that reply with an HTTP status
+    // line are proposed.
+    const checked = await Promise.all(open.map(async (port) => [port, await speaksHttp(port)]));
+    const web = checked.filter(([, isHttp]) => isHttp).map(([port]) => port);
+    const ignored = checked.filter(([, isHttp]) => !isHttp).map(([port]) => port);
+
+    discovered = web.map((port, i) => ({ label: i === 0 ? 'app' : `svc-${port}`, port }));
+    if (web.length) log(`found web servers on ${web.join(', ')}`);
+    if (ignored.length) log(`ignored ${ignored.join(', ')}: open, but not speaking HTTP`);
+  }
+
+  if (!discovered.length) {
+    const e = new Error(
+      'Nothing on the usual ports is serving HTTP, so there is nothing to put behind a proxy.\n' +
+        'Start your application first, or name the ports yourself.',
+    );
+    e.code = 'NO_UPSTREAMS';
+    throw e;
+  }
+
+  const config = defaultConfig({ cwd, tier, project, upstreams: discovered });
+  writeConfig(config, cwd);
+  log(`wrote ${configPath(cwd)}`);
+
+  return { config, changes: describeChanges(config, {}), path: configPath(cwd) };
+}
+
+// ------------------------------------------------------------------------ up
+
+/**
+ * Start the harness.
+ *
+ * @param {object} opts
+ * @param {boolean} opts.consent  Must be true. The caller obtains it.
+ */
+export async function up(opts = {}) {
+  const {
+    cwd = process.cwd(),
+    consent = false,
+    httpPort = 80,
+    httpsPort = 443,
+    hostsFile = defaultHostsPath(),
+    env = process.env,
+    trust = true,
+    log = () => {},
+  } = opts;
+
+  const config = readConfig(cwd);
+  if (!config) {
+    const e = new Error('This project is not initialised. Run `notlocalhost init` first.');
+    e.code = 'NOT_INITIALISED';
+    throw e;
+  }
+
+  if (!consent) {
+    const e = new Error('up() requires explicit consent; the caller must obtain it first.');
+    e.code = 'NO_CONSENT';
+    e.changes = describeChanges(config, {});
+    throw e;
+  }
+
+  const state = readState(cwd) ?? emptyState();
+  if (state.running?.pid && isAlive(state.running.pid)) {
+    const e = new Error(`The harness is already running (pid ${state.running.pid}). Run \`notlocalhost down\` first.`);
+    e.code = 'ALREADY_RUNNING';
+    throw e;
+  }
+
+  // ---- proxy ---------------------------------------------------------------
+  const caddy = await resolveCaddy({ cwd, log });
+  state.caddy = { path: caddy.path, source: caddy.source, version: caddy.version };
+  writeState(state, cwd);
+
+  // ---- configuration -------------------------------------------------------
+  const caddyfilePath = join(harnessDir(cwd), 'Caddyfile');
+  const rendered = renderCaddyfile(config, { httpPort, httpsPort });
+  if (existsSync(caddyfilePath) && !isUnmodified(readFileSync(caddyfilePath, 'utf8'), config, { httpPort, httpsPort })) {
+    log('keeping your edited Caddyfile; delete it to regenerate');
+  } else {
+    mkdirSync(harnessDir(cwd), { recursive: true });
+    writeFileSync(caddyfilePath, rendered, 'utf8');
+  }
+
+  // ---- hosts ---------------------------------------------------------------
+  // Recorded before it is attempted, so a crash between the two still leaves
+  // `down` something to work from.
+  if (TIERS[config.tier].needsHostsEntry) {
+    const before = digestOfFile(hostsFile);
+    state.hosts = { path: hostsFile, digestBefore: before, hostnames: config.sites.map((s) => s.host), applied: false };
+    writeState(state, cwd);
+
+    const result = applyBlock(hostsFile, config.project, config.sites.map((s) => s.host));
+    state.hosts.applied = result.changed;
+    state.hosts.digestAfter = result.after;
+    state.hosts.backup = result.backup;
+    writeState(state, cwd);
+    log(result.changed ? `added ${config.sites.length} hostnames to ${hostsFile}` : 'hosts file already had the entries');
+  }
+
+  // ---- certificate authority ----------------------------------------------
+  if (trust) {
+    const cert = await trustCa({ caddyPath: caddy.path, env, log });
+    state.caTrusted = true;
+    state.ca = cert;
+    writeState(state, cwd);
+  }
+
+  // ---- process -------------------------------------------------------------
+  const logPath = join(harnessDir(cwd), 'caddy.log');
+  const child = spawn(caddy.path, ['run', '--config', caddyfilePath, '--adapter', 'caddyfile'], {
+    cwd,
+    env,
+    detached: true,
+    stdio: ['ignore', openLog(logPath), openLog(logPath)],
+    windowsHide: true,
+  });
+  child.unref();
+
+  state.running = { pid: child.pid, startedAt: new Date().toISOString(), httpPort, httpsPort, logPath };
+  writeState(state, cwd);
+  log(`proxy started (pid ${child.pid})`);
+
+  return { config, state, caddy, caddyfilePath, sites: config.sites, logPath };
+}
+
+// ---------------------------------------------------------------------- down
+
+/**
+ * Undo everything, in reverse, and report what could not be undone.
+ *
+ * Never throws for a step that fails. `down` has several things to reverse and
+ * abandoning the rest because one failed leaves more behind, not less. Each
+ * step reports its own outcome and the caller decides what that means.
+ */
+export async function down(opts = {}) {
+  const { cwd = process.cwd(), purge = false, env = process.env, log = () => {} } = opts;
+
+  const state = readState(cwd);
+  if (!state) {
+    return { didNothing: true, steps: [], clean: true, summary: 'Nothing was recorded as changed, so there is nothing to undo.' };
+  }
+
+  const steps = [];
+
+  // ---- process -------------------------------------------------------------
+  if (state.running?.pid) {
+    const killed = stopProcess(state.running.pid);
+    steps.push({
+      what: 'stop the proxy',
+      ok: killed.ok,
+      detail: killed.ok ? `stopped pid ${state.running.pid}` : `could not stop pid ${state.running.pid}: ${killed.error}`,
+    });
+    log(killed.ok ? 'proxy stopped' : `proxy could not be stopped: ${killed.error}`);
+  }
+
+  // ---- certificate authority ----------------------------------------------
+  if (state.caTrusted && state.caddy?.path) {
+    const result = await untrustCa({
+      caddyPath: state.caddy.path,
+      fingerprint: state.ca?.fingerprint,
+      env,
+      log,
+    });
+    steps.push({
+      what: 'remove the certificate authority',
+      ok: result.removed,
+      detail: result.removed
+        ? 'removed from the trust store, verified absent'
+        : `the trust store reports "${result.state}"`,
+      advice: result.advice,
+    });
+  }
+
+  // ---- hosts ---------------------------------------------------------------
+  if (state.hosts?.applied) {
+    const result = removeBlock(state.hosts.path, readConfigProject(cwd, state), state.hosts.digestBefore, {
+      backupPath: state.hosts.backup ?? `${state.hosts.path}.notlocalhost-backup`,
+    });
+    steps.push({
+      what: 'restore the hosts file',
+      ok: result.matches,
+      detail: result.matches
+        ? `${state.hosts.path} is byte-for-byte what it was`
+        : (result.reason ?? 'the file does not match its original digest'),
+    });
+  }
+
+  // ---- project files -------------------------------------------------------
+  clearState(cwd);
+  if (purge) {
+    rmSync(harnessDir(cwd), { recursive: true, force: true });
+    steps.push({ what: 'remove .notlocalhost/', ok: true, detail: 'deleted, including the downloaded proxy' });
+  }
+
+  const failed = steps.filter((s) => !s.ok);
+  return {
+    didNothing: false,
+    steps,
+    clean: failed.length === 0,
+    summary: failed.length
+      ? `${failed.length} step${failed.length === 1 ? '' : 's'} could not be completed: ${failed.map((f) => f.what).join(', ')}`
+      : 'The machine is back to how it was.',
+  };
+}
+
+// --------------------------------------------------------------- primitives
+
+function readConfigProject(cwd, state) {
+  try {
+    return readConfig(cwd)?.project ?? state.project ?? 'notlocalhost';
+  } catch {
+    return state.project ?? 'notlocalhost';
+  }
+}
+
+/**
+ * A file descriptor the detached proxy can write to.
+ *
+ * The child outlives this process, so its output cannot go to a pipe nobody
+ * will read -- that fills the buffer and stalls it. Appending to a file keeps
+ * the log across restarts, which is what someone wants when asking why the
+ * proxy would not start.
+ */
+function openLog(path) {
+  mkdirSync(dirname(path), { recursive: true });
+  return openSync(path, 'a');
+}
+
+export function isAlive(pid) {
+  if (!pid) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err.code === 'EPERM';
+  }
+}
+
+/**
+ * Stop the proxy.
+ *
+ * Windows needs taskkill to reach the whole tree; elsewhere a signal is enough.
+ * A process that is already gone counts as stopped -- the goal is that it is
+ * not running, not that we were the one to end it.
+ */
+export function stopProcess(pid) {
+  if (!isAlive(pid)) return { ok: true, alreadyGone: true };
+  try {
+    if (OS === 'win32') {
+      execFileSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore', timeout: 20_000, windowsHide: true });
+    } else {
+      process.kill(pid, 'SIGTERM');
+    }
+  } catch (err) {
+    if (!isAlive(pid)) return { ok: true, alreadyGone: true };
+    return { ok: false, error: err.message };
+  }
+  return { ok: !isAlive(pid), error: isAlive(pid) ? 'still running after the stop signal' : undefined };
+}
+
+export { previewBlock, caRootPath, describeCertificate };

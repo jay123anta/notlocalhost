@@ -9,6 +9,9 @@
  */
 import { EXIT } from '../exit-codes.js';
 import { diagnose, renderDoctor } from './doctor.js';
+import { init, up, down } from './lifecycle.js';
+import { readConfig, describeChanges, TIERS } from './config.js';
+import { summariseSites } from './caddyfile.js';
 
 /**
  * @param {'init'|'up'|'down'|'doctor'} command
@@ -36,20 +39,92 @@ export async function runHarnessCommand(command, options, io) {
       return result.blocking.length ? EXIT.FINDINGS : EXIT.CLEAN;
     }
 
-    case 'init':
-    case 'up':
-    case 'down':
-      stderr.write(
-        `\n${c.yellow(`\`notlocalhost ${command}\` is not built yet.`)}\n\n` +
-          `  The harness is in progress. What works today:\n\n` +
-          `    ${c.bold('notlocalhost doctor')}   report on this machine, changing nothing\n` +
-          `    ${c.bold('notlocalhost <url>')}    analyze a running dev server\n\n` +
-          `  Nothing has been changed on this machine.\n`,
-      );
-      return EXIT.USAGE;
+    case 'init': {
+      const log = (m) => stderr.write(`${c.dim(`  ${m}`)}\n`);
+      const result = await init({ cwd: process.cwd(), tier: options.tier, force: options.force, log });
+
+      stdout.write(`\n${c.bold('Initialised')} ${result.config.project} ${c.dim(`(${result.config.tier} tier)`)}\n\n`);
+      for (const line of summariseSites(result.config)) stdout.write(`  ${line}\n`);
+      stdout.write(`\n  ${c.dim(`configuration written to ${result.path}`)}\n`);
+
+      stdout.write(`\n${c.bold('Running up would change this machine:')}\n\n`);
+      writeChanges(stdout, c, result.changes);
+
+      const tier = TIERS[result.config.tier];
+      if (tier.cannotGive.length) {
+        stdout.write(`  ${c.yellow('What this tier cannot give you:')}\n`);
+        for (const x of tier.cannotGive) stdout.write(`    ${c.dim(x)}\n`);
+        stdout.write('\n');
+      }
+      stdout.write(`  Nothing has been changed yet. Run ${c.bold('notlocalhost up --yes')} when you are ready.\n\n`);
+      return EXIT.CLEAN;
+    }
+
+    case 'up': {
+      const config = readConfig(process.cwd());
+      if (!config) {
+        stderr.write(`\n${c.red('not initialised')}: run ${c.bold('notlocalhost init')} first.\n`);
+        return EXIT.USAGE;
+      }
+
+      // Consent is obtained here and never inside the function that acts, so
+      // that neither can be exercised without the other being visible.
+      if (!options.yes) {
+        stdout.write(`\n${c.bold('This will change your machine:')}\n\n`);
+        writeChanges(stdout, c, describeChanges(config, {}));
+        stdout.write(`  Re-run with ${c.bold('--yes')} to proceed. Nothing has been changed.\n\n`);
+        return EXIT.CLEAN;
+      }
+
+      const log = (m) => stderr.write(`${c.dim(`  ${m}`)}\n`);
+      const result = await up({ cwd: process.cwd(), consent: true, log });
+
+      stdout.write(`\n${c.green(c.bold('Up.'))}\n\n`);
+      for (const line of summariseSites(result.config)) stdout.write(`  ${line}\n`);
+      stdout.write(`\n  ${c.dim(`proxy log: ${result.logPath}`)}\n`);
+      stdout.write(`  ${c.dim('notlocalhost down reverses everything above.')}\n\n`);
+      return EXIT.CLEAN;
+    }
+
+    case 'down': {
+      const log = (m) => stderr.write(`${c.dim(`  ${m}`)}\n`);
+      const result = await down({ cwd: process.cwd(), purge: options.purge, log });
+
+      if (result.didNothing) {
+        stdout.write(`\n  ${result.summary}\n\n`);
+        return EXIT.CLEAN;
+      }
+
+      stdout.write('\n');
+      for (const step of result.steps) {
+        stdout.write(`  ${step.ok ? c.green('done  ') : c.red('FAILED')}  ${step.what}\n`);
+        stdout.write(`          ${c.dim(step.detail)}\n`);
+        for (const a of step.advice ?? []) stdout.write(`          ${c.yellow(a)}\n`);
+      }
+      stdout.write(`\n  ${result.clean ? c.green(result.summary) : c.red(result.summary)}\n\n`);
+
+      // A step that could not be completed leaves something behind, and the
+      // caller should be able to notice that from an exit code alone.
+      return result.clean ? EXIT.CLEAN : EXIT.TOOL_FAILURE;
+    }
 
     default:
       stderr.write(`\n${c.red('error')}: unknown command "${command}"\n`);
       return EXIT.USAGE;
+  }
+}
+
+/**
+ * Print a change list.
+ *
+ * Every entry names what changes, what it means, and how it is undone. Someone
+ * who reads only this should be able to decide, and should never be surprised
+ * afterwards -- which is the entire contract of asking before acting.
+ */
+function writeChanges(stdout, c, changes) {
+  for (const change of changes) {
+    stdout.write(`  ${c.bold(change.what)}${change.elevation ? c.yellow('  (needs elevation)') : ''}\n`);
+    stdout.write(`    ${c.dim(change.detail)}\n`);
+    stdout.write(`    ${c.dim(`reversed by: ${change.reversedBy}`)}\n\n`);
   }
 }

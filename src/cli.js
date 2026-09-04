@@ -140,6 +140,10 @@ export function parseArgs(argv) {
     help: false,
     version: false,
     listBrowsers: false,
+    yes: false,
+    force: false,
+    purge: false,
+    tier: 'localhost',
   };
 
   const need = (i, flag) => {
@@ -206,6 +210,25 @@ export function parseArgs(argv) {
         case '--cross-site':
           options.crossSite = true;
           break;
+        case '--yes':
+        case '-y':
+          options.yes = true;
+          break;
+        case '--force':
+          options.force = true;
+          break;
+        case '--purge':
+          options.purge = true;
+          break;
+        case '--tier': {
+          const v = need(i, '--tier');
+          i++;
+          if (!['localhost', 'test'].includes(v)) {
+            throw new UsageError(`--tier must be "localhost" or "test", got "${v}"`);
+          }
+          options.tier = v;
+          break;
+        }
         case '--map': {
           const v = need(i, '--map');
           i++;
