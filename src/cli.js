@@ -15,6 +15,23 @@ import { VERSION, SCHEMA_VERSION } from './version.js';
 
 const SEVERITY_VALUES = ['will-break', 'may-break', 'info', 'none'];
 
+/**
+ * Harness subcommands.
+ *
+ * `notlocalhost <url>` is shipped surface: it is the first line of the README
+ * and is sitting in other people's scripts. Adding subcommands must not be able
+ * to change what it means, so the dispatch rule is deliberately narrow:
+ *
+ *   A subcommand is only recognised when the first non-flag argument is
+ *   EXACTLY one of these words. Anything that parses as a URL is a target, and
+ *   anything containing a scheme, a slash or a dot cannot reach this list.
+ *
+ * `notlocalhost doctor` was a usage error before this existed, so nothing that
+ * previously worked changes meaning. Only something that previously failed
+ * starts succeeding.
+ */
+export const SUBCOMMANDS = ['init', 'up', 'down', 'doctor'];
+
 const HELP = `
 notlocalhost ${VERSION}
   Your localhost is lying to you. This tells you exactly how.
@@ -100,6 +117,7 @@ EXAMPLES
  */
 export function parseArgs(argv) {
   const options = {
+    command: 'analyze',
     url: null,
     flow: null,
     json: undefined,
@@ -249,10 +267,21 @@ export function parseArgs(argv) {
         case '--quiet':
           options.quiet = true;
           break;
-        default:
+        default: {
           if (arg.startsWith('-')) throw new UsageError(`unknown option "${arg}"`);
+
+          // The very first positional argument, and only that one, may name a
+          // subcommand. A URL always wins: none of the subcommand words can
+          // contain a scheme, a slash or a dot, so no target can be captured.
+          const isFirstPositional = options.url === null && options.command === 'analyze';
+          if (isFirstPositional && SUBCOMMANDS.includes(arg)) {
+            options.command = arg;
+            break;
+          }
+
           if (options.url) throw new UsageError(`unexpected second target "${arg}"`);
           options.url = arg;
+        }
       }
     }
   } catch (err) {
@@ -261,6 +290,14 @@ export function parseArgs(argv) {
   }
 
   if (options.help || options.version || options.listBrowsers) return { ok: true, options };
+
+  // A subcommand operates on the project directory, not on a URL.
+  if (options.command !== 'analyze') {
+    if (options.url) {
+      return { ok: false, error: `"${options.command}" does not take a URL. It works on the project in this directory.` };
+    }
+    return { ok: true, options };
+  }
 
   if (!options.url) return { ok: false, error: 'no target URL given' };
 
@@ -313,6 +350,18 @@ export async function run(argv, io = {}) {
     }
     for (const b of found) stdout.write(`${b.channel.padEnd(12)} ${b.name.padEnd(24)} ${b.path}\n`);
     return EXIT.CLEAN;
+  }
+
+  // Harness subcommands operate on the project directory rather than a URL.
+  // Loaded on demand so that `notlocalhost <url>` -- the shipped path -- pays
+  // nothing for code it never touches.
+  if (o.command !== 'analyze') {
+    try {
+      const { runHarnessCommand } = await import('./harness/commands.js');
+      return await runHarnessCommand(o.command, o, { stdout, stderr, styler: c });
+    } catch (err) {
+      return reportFailure(err, stderr, c, o);
+    }
   }
 
   // JSON to stdout implies a quiet terminal, or the document is unparseable.

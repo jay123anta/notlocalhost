@@ -188,15 +188,27 @@ export async function checkPorts(os = OS, ports = [80, 443]) {
 
 // ------------------------------------------------------------------- proxy
 
-/** Is there already a usable Caddy, or must one be fetched? */
-export function checkProxy() {
-  const found = findBinary('caddy');
+/**
+ * Is there already a usable Caddy, or must one be fetched?
+ *
+ * Looks on PATH and in this project. A copy fetched by an earlier run lives in
+ * the project directory, and reporting "will download" when one is already
+ * sitting there makes the diagnosis contradict itself.
+ */
+export function checkProxy(cwd = process.cwd()) {
+  const projectBinary = join(cwd, '.notlocalhost', 'caddy', OS === 'win32' ? 'caddy.exe' : 'caddy');
+  const found =
+    findBinary('caddy') ??
+    (existsSync(projectBinary) ? { path: projectBinary, version: null, source: 'project' } : null);
+
   if (found) {
     return {
       id: 'proxy',
       title: 'Caddy',
       status: 'ok',
-      detail: `Found at ${found.path}${found.version ? ` (${found.version})` : ''}. It will be used as-is; nothing is downloaded.`,
+      detail:
+        `Found at ${found.path}${found.version ? ` (${found.version})` : ''}. ` +
+        `It will be used as-is; nothing is downloaded.`,
       remedy: [],
       evidence: found,
     };
@@ -299,12 +311,12 @@ function findBinary(name) {
 }
 
 /** Run every check. Never throws: a diagnostic that crashes diagnoses nothing. */
-export async function runAllChecks(os = OS) {
+export async function runAllChecks(os = OS, cwd = process.cwd()) {
   const checks = [
     () => checkDns(os),
     () => checkCertTrust(os),
     () => checkPorts(os),
-    () => checkProxy(),
+    () => checkProxy(cwd),
   ];
   const out = [];
   for (const run of checks) {
