@@ -198,6 +198,15 @@ try {
     check(`exit ${label}`, r.code === want, `got ${r.code}, wanted ${want}`);
   }
 
+  heading('a successful run exits promptly');
+  // The browser-launch deadline is a ref'd timer. If it is not cleared on the
+  // happy path it holds the event loop open for its full duration, adding that
+  // to the exit time of every successful run.
+  const t0 = Date.now();
+  const timed = cli(work, [URL_, '--no-html', '--quiet', '--fail-on', 'none']);
+  const elapsed = Date.now() - t0;
+  check('a clean run exits without lingering', timed.code === 0 && elapsed < 30_000, `${(elapsed / 1000).toFixed(1)}s`);
+
   heading('the process never exits silently');
   const hang = cli(work, [URL_, '--no-html', '--quiet', '--timeout', '1', '--flow-timeout', '1']);
   check('never Node exit 13', hang.code !== 13, `exit ${hang.code}`);

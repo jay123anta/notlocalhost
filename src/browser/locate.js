@@ -140,6 +140,49 @@ function isExecutableFile(p) {
  * @param {string} p
  * @returns {string|null} A launchable executable, or null.
  */
+/** Names that are helpers rather than the browser launcher. */
+const IS_BUNDLE_HELPER = /helper|crashpad|updater|notification|alerts|relauncher|_handler$/i;
+
+/** Launcher names, most-specific first, matched case-insensitively. */
+const LAUNCHER_NAMES = [
+  'google chrome for testing',
+  'google chrome',
+  'chromium',
+  'microsoft edge',
+  'chrome',
+  'msedge',
+];
+
+/**
+ * Ask a browser binary what version it is.
+ *
+ * Used only when something has already gone wrong, because spawning a process
+ * costs time that a healthy run should not pay. A binary that cannot answer
+ * this is not a browser launcher, which distinguishes "we picked the wrong
+ * executable" from "the browser will not run under automation" -- two problems
+ * with completely different fixes.
+ *
+ * @param {string} path
+ * @returns {string|null}
+ */
+export function probeBrowserVersion(path) {
+  try {
+    const out = execFileSync(path, ['--version'], {
+      encoding: 'utf8',
+      timeout: 5000,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+    });
+    const line = String(out).trim().split('\n')[0];
+    // Chrome on Windows answers --version with "Opening in existing browser
+    // session." when an instance is already running. Requiring something that
+    // looks like a version number keeps that from being read as success.
+    return line && /\d+\.\d+/.test(line) ? line : null;
+  } catch {
+    return null;
+  }
+}
+
 export function resolveBrowserExecutable(p) {
   if (!p) return null;
   if (isExecutableFile(p)) return p;
@@ -156,11 +199,16 @@ export function resolveBrowserExecutable(p) {
   // ends in `.app` -- some tools hand back the bundle without the suffix.
   const macOSDir = join(p, 'Contents/MacOS');
   try {
-    const entries = readdirSync(macOSDir);
-    // Prefer a name that looks like the bundle's own, then any executable.
+    const entries = readdirSync(macOSDir).filter((e) => isExecutableFile(join(macOSDir, e)));
+    // Contents/MacOS holds helper executables beside the real launcher, and
+    // picking a helper yields a process that starts and never speaks. Order the
+    // candidates rather than taking whatever the directory lists first.
     const bundleName = p.replace(/\\/g, '/').split('/').pop()?.replace(/\.app$/, '');
-    const preferred = entries.find((e) => e === bundleName);
-    const chosen = preferred ?? entries.find((e) => isExecutableFile(join(macOSDir, e)));
+    const usable = entries.filter((e) => !IS_BUNDLE_HELPER.test(e));
+    const chosen =
+      usable.find((e) => e === bundleName) ??
+      LAUNCHER_NAMES.map((n) => usable.find((e) => e.toLowerCase() === n)).find(Boolean) ??
+      usable[0];
     if (chosen) return join(macOSDir, chosen);
   } catch {
     /* not a bundle */

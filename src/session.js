@@ -14,6 +14,7 @@
 import { pathToFileURL } from 'node:url';
 import { resolve as resolvePath } from 'node:path';
 import { instrumentPage } from './browser/instrument.js';
+import { probeBrowserVersion } from './browser/locate.js';
 import { isScannableMime } from './collect/leaked-urls.js';
 
 const DEFAULT_MAX_BODY_BYTES = 2 * 1024 * 1024;
@@ -179,9 +180,27 @@ export async function runSession(opts) {
  * the wrong thing to lead with, so the diagnosis goes in the message and the
  * dump goes behind --verbose.
  */
-async function launchBrowser(chromium, browserInfo, headed) {
+async function launchBrowser(chromium, browserInfo, headed, launchTimeout = 45_000) {
+  // A launch that neither resolves nor rejects is a real failure mode: on
+  // macOS arm64 a mis-selected binary inside a bundle leaves the promise
+  // pending forever. Playwright's own timeout does not always cover it, so
+  // bound it here and say which browser failed to start.
+  //
+  // The timer must be cleared on the happy path too. A pending ref'd timer
+  // keeps the event loop alive, so leaving it would add its full duration to
+  // the exit time of every successful run.
+  let timer;
   try {
-    return await chromium.launch(launchOptions(browserInfo, headed));
+    const deadline = new Promise((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`did not start within ${Math.round(launchTimeout / 1000)}s and did not report an error`)),
+        launchTimeout + 5_000,
+      );
+    });
+    return await Promise.race([
+      chromium.launch({ ...launchOptions(browserInfo, headed), timeout: launchTimeout }),
+      deadline,
+    ]);
   } catch (err) {
     const raw = String(err?.message ?? err);
     const e = new Error(`${browserInfo.name} would not start.\n\n${diagnoseLaunchFailure(raw, browserInfo)}`);
@@ -189,6 +208,8 @@ async function launchBrowser(chromium, browserInfo, headed) {
     e.browserLog = raw;
     e.cause = err;
     throw e;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -198,6 +219,23 @@ async function launchBrowser(chromium, browserInfo, headed) {
  * generic apology.
  */
 function diagnoseLaunchFailure(raw, browserInfo) {
+  if (/did not start within \d+s and did not report an error/.test(raw)) {
+    return [
+      'The browser process started but never became usable, and never reported why.',
+      '',
+      `The binary used was:\n  ${browserInfo.path}`,
+      '',
+      'The usual cause is that this is not the launcher. Inside a macOS bundle,',
+      'Contents/MacOS holds helper executables next to the real one, and picking a',
+      'helper produces exactly this: a process that runs and never speaks.',
+      '',
+      'Check it directly:',
+      `  "${browserInfo.path}" --version`,
+      '',
+      'If that prints nothing, point at the launcher explicitly:',
+      '  notlocalhost <url> --browser-path "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"',
+    ].join('\n');
+  }
   if (/chrome_crashpad_handler: Permission denied|Permission denied \(13\)/.test(raw)) {
     return [
       'A helper binary next to the browser is not executable.',

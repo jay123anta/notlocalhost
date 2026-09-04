@@ -368,8 +368,10 @@ export async function run(argv, io = {}) {
  * That is the worst possible failure for a CLI, so the whole analysis runs
  * under a deadline that turns it into a documented exit code and a message.
  *
- * The timer is unref'd so it never keeps a healthy run alive a moment longer
- * than it needs.
+ * The timer must NOT be unref'd. An unref'd timer does not hold the event loop
+ * open, so in exactly the case this exists for -- an unsettled promise and an
+ * otherwise empty loop -- Node would exit 13 before the deadline ever fired.
+ * Clearing it in `finally` is what stops it delaying a healthy run.
  *
  * @template T
  * @param {number} ms
@@ -389,7 +391,6 @@ async function withWatchdog(ms, promise) {
       err.code = 'WATCHDOG';
       reject(err);
     }, ms);
-    if (typeof timer.unref === 'function') timer.unref();
   });
 
   try {
