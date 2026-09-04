@@ -44,6 +44,9 @@ OPTIONS
                        than a subdomain of one site.
   --map <local=host>   Pin one local origin to a real hostname. Repeatable.
                        e.g. --map localhost:3000=app.acme.com
+  --map </path=host>   Model a path prefix that becomes its own host in
+                       production, which is what a dev-server proxy hides.
+                       e.g. --map /api=api.acme.com
 
   --timeout <ms>       Navigation timeout. Default: 30000
   --flow-timeout <ms>  Budget for the --flow script. Default: 60000
@@ -106,6 +109,7 @@ export function parseArgs(argv) {
     domain: 'example.com',
     crossSite: false,
     map: {},
+    mapPaths: {},
     timeout: 30_000,
     flowTimeout: 60_000,
     settle: 1200,
@@ -188,8 +192,29 @@ export function parseArgs(argv) {
           const v = need(i, '--map');
           i++;
           const eq = v.indexOf('=');
-          if (eq < 1) throw new UsageError(`--map expects local=host, got "${v}"`);
-          options.map[v.slice(0, eq).trim().toLowerCase()] = v.slice(eq + 1).trim().toLowerCase();
+          if (eq < 1) throw new UsageError(`--map expects local=host or /path=host, got "${v}"`);
+          const from = v.slice(0, eq).trim();
+          const to = v.slice(eq + 1).trim().toLowerCase();
+
+          // Git Bash and MSYS rewrite a leading-slash argument into a Windows
+          // path, so `--map /api=api.acme.com` silently arrives as
+          // `C:/Program Files/Git/api=api.acme.com`. Left alone that produces a
+          // confidently wrong analysis, which is worse than an error.
+          if (/^[A-Za-z]:[\\/]/.test(from)) {
+            throw new UsageError(
+              `--map received "${from}", which is a filesystem path, not a hostname or a URL path.\n` +
+                '  Your shell rewrote a leading slash. Git Bash and MSYS do this to any argument\n' +
+                '  that starts with "/". Use one of:\n' +
+                `      --map //${from.split(/[\\/]/).pop()}=${to}\n` +
+                `      MSYS_NO_PATHCONV=1 notlocalhost ...\n` +
+                '  or run the command from PowerShell or cmd, where it is passed through unchanged.',
+            );
+          }
+          // A leading slash means "this path prefix becomes its own host",
+          // which is how a dev-server proxy hiding a production split is
+          // modelled. Anything else maps one local origin to one hostname.
+          if (from.startsWith('/')) options.mapPaths[from] = to;
+          else options.map[from.toLowerCase()] = to;
           break;
         }
         case '--timeout':
@@ -306,6 +331,7 @@ export async function run(argv, io = {}) {
       domain: o.domain,
       crossSite: o.crossSite,
       map: o.map,
+        mapPaths: o.mapPaths,
       timeout: o.timeout,
       flowTimeout: o.flowTimeout,
       settle: o.settle,

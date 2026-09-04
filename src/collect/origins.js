@@ -150,9 +150,21 @@ export function sameSite(a, b) {
  * @param {boolean} [opts.crossSite]  Map each local port to its own site.
  * @param {Record<string,string>} [opts.explicit] hostPort -> real hostname.
  */
-export function createDeploymentModel({ domain, crossSite = false, explicit = {} }) {
+export function createDeploymentModel({ domain, crossSite = false, explicit = {}, paths = {} }) {
   const assigned = new Map(Object.entries(explicit));
   let n = 0;
+
+  // Path prefixes that become their own host. This models the most common real
+  // topology there is: `/api` served same-origin in development by a dev-server
+  // proxy, and split onto its own subdomain in production. Without it a
+  // same-origin request can never be seen to become cross-origin, and the CORS
+  // headers that localhost's origin masks stay invisible -- which is the whole
+  // point of looking.
+  //
+  // Longest prefix wins, so `/api/v2` can be mapped separately from `/api`.
+  const pathRules = Object.entries(paths)
+    .map(([prefix, host]) => [prefix.startsWith('/') ? prefix : `/${prefix}`, host])
+    .sort((a, b) => b[0].length - a[0].length);
 
   /** @param {string} hostPort e.g. "localhost:3000" */
   function hostnameFor(hostPort) {
@@ -169,6 +181,18 @@ export function createDeploymentModel({ domain, crossSite = false, explicit = {}
     const p = parseOrigin(url);
     if (!p) return null;
     if (!p.isLoopback && !p.isPrivate) return p.href; // already a real origin
+
+    // A mapped path prefix moves the request to its own host, which is what
+    // makes a same-origin call visibly become a cross-origin one.
+    const matched = pathRules.find(([prefix]) => p.pathname === prefix || p.pathname.startsWith(`${prefix}/`));
+    if (matched) {
+      const u = new URL(p.href);
+      u.protocol = p.isWebSocket ? 'wss:' : 'https:';
+      u.hostname = matched[1];
+      u.port = '';
+      return u.href;
+    }
+
     const host = hostnameFor(p.hostPort);
     const scheme = p.isWebSocket ? 'wss' : 'https';
     const u = new URL(p.href);

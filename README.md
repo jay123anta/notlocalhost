@@ -245,6 +245,7 @@ report as an artifact and writes a summary to the job page.
 | `--domain <domain>` | `example.com` | Registrable domain to assume for deployment. |
 | `--cross-site` | off | Assume each local port becomes a separate *site*, not a subdomain. |
 | `--map <local=host>` | — | Pin one local origin, e.g. `--map localhost:3000=app.acme.com`. Repeatable. |
+| `--map </path=host>` | — | A path prefix that becomes its own host in production — what a dev-server proxy hides. e.g. `--map /api=api.acme.com`. In Git Bash use `//api=...`. |
 | `--timeout <ms>` | `30000` | Navigation timeout. |
 | `--flow-timeout <ms>` | `60000` | Budget for the flow script. |
 | `--settle <ms>` | `1200` | Quiet time after load before collecting. |

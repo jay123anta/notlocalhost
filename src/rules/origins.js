@@ -253,6 +253,73 @@ export function originRules(ctx) {
     }
   }
 
+  // --------------------------- CORS that localhost's origin currently masks --
+  //
+  // The sharpest case in this whole area, and the easiest to miss. A request
+  // that is same-origin today needs no CORS at all, so the server sends no
+  // Access-Control-Allow-Origin and nothing fails. After deployment the same
+  // request is cross-origin, CORS applies, and the absent header blocks it.
+  // Nothing about the local run hints at this: the header is missing because
+  // it is currently unnecessary.
+  const CORS_RELEVANT = new Set(['XHR', 'Fetch', 'EventSource']);
+  const unprotected = [];
+
+  for (const r of capture.requests) {
+    if (!CORS_RELEVANT.has(r.resourceType)) continue;
+    const headers = lower(r.responseHeaders ?? r.rawResponseHeaders);
+    // No response at all means it failed for some other reason, already
+    // reported elsewhere. Only a served response can be judged on its headers.
+    if (!Object.keys(headers).length) continue;
+    if (headers['access-control-allow-origin'] !== undefined) continue;
+
+    const c = classifyRequest(pageUrl, r.url, model);
+    if (!c.becomesCrossOrigin && !c.becomesCrossSite) continue;
+
+    const cred = credentialed.get(r.url);
+    unprotected.push({ url: r.url, method: r.method, credentialed: cred?.mode === 'include', classification: c });
+  }
+
+  if (unprotected.length) {
+    const anyCredentialed = unprotected.some((u) => u.credentialed);
+    out.push(
+      finding({
+        id: 'cors.missing',
+        severity: anyCredentialed ? 'will-break' : 'may-break',
+        title: `${unprotected.length} request${unprotected.length === 1 ? '' : 's'} will need CORS headers that ${unprotected.length === 1 ? 'is' : 'are'} not being sent`,
+        summary:
+          'These responses carry no Access-Control-Allow-Origin. That is correct today, because the requests ' +
+          'are same-origin and CORS does not apply to them -- the browser never asks. Under the assumed ' +
+          'deployment model they become cross-origin, CORS does apply, and a response with no ' +
+          'Access-Control-Allow-Origin is not exposed to the page.\n\n' +
+          'This is the failure localhost hides most completely. There is no warning, no console message and ' +
+          'no failing test locally, because nothing is wrong locally. The header is missing precisely because ' +
+          'it is not needed yet.' +
+          (anyCredentialed
+            ? '\n\nAt least one of these sends credentials, which raises the bar further: a credentialed ' +
+              'cross-origin response needs Access-Control-Allow-Credentials: true and an exact ' +
+              'Access-Control-Allow-Origin, never a wildcard.'
+            : ''),
+        evidence: unprotected.slice(0, 10).map((u) => ({
+          label: `${u.method} ${u.url}`,
+          value:
+            `no Access-Control-Allow-Origin; ` +
+            `today ${u.classification.now.sameOrigin ? 'same-origin' : 'same-site'}, ` +
+            `deployed ${u.classification.then.sameSite ? 'cross-origin, same-site' : 'cross-site'}` +
+            (u.credentialed ? '; sends credentials' : ''),
+        })),
+        fix: [
+          'Return Access-Control-Allow-Origin from these endpoints for the deployed front-end origin.',
+          'Answer OPTIONS preflights before any authentication middleware can reject them.',
+          anyCredentialed
+            ? 'For the credentialed ones: Access-Control-Allow-Credentials: true plus an exact origin, and add Vary: Origin.'
+            : 'Add Vary: Origin if the allowed origin varies by request.',
+          'Or keep these endpoints same-origin behind a path prefix, which removes the requirement entirely.',
+        ],
+        refs: [REF.fetchCors],
+      }),
+    );
+  }
+
   // ------------------------------------------- Chrome's own CORS verdict --
   const corsBlocked = capture.requests.filter((r) => r.failed?.corsErrorStatus?.corsError);
   if (corsBlocked.length) {
