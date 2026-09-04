@@ -47,7 +47,8 @@
     "test:e2e": "node --test test/e2e.test.js",
     "fixture": "node test/fixtures/lying-app.mjs",
     "test:report": "node --test test/report.test.js",
-    "smoke": "node scripts/smoke.mjs"
+    "smoke": "node scripts/smoke.mjs",
+    "prepublishOnly": "npm run lint && node scripts/prepublish-check.mjs"
   },
   "dependencies": {
     "playwright-core": "^1.56.0"
