@@ -144,6 +144,8 @@ export function parseArgs(argv) {
     force: false,
     purge: false,
     tier: 'localhost',
+    httpPort: 80,
+    httpsPort: 443,
   };
 
   const need = (i, flag) => {
@@ -219,6 +221,14 @@ export function parseArgs(argv) {
           break;
         case '--purge':
           options.purge = true;
+          break;
+        case '--http-port':
+          options.httpPort = int(need(i, '--http-port'), '--http-port');
+          i++;
+          break;
+        case '--https-port':
+          options.httpsPort = int(need(i, '--https-port'), '--https-port');
+          i++;
           break;
         case '--tier': {
           const v = need(i, '--tier');

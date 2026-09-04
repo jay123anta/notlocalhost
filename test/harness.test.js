@@ -44,7 +44,7 @@ import {
 import { renderCaddyfile, summariseSites, isUnmodified } from '../src/harness/caddyfile.js';
 import { assetFor, parseChecksums, digest } from '../src/harness/caddy.js';
 import { checkDns, checkCertTrust, checkPorts, checkProxy, runAllChecks, hostsPath } from '../src/harness/checks.js';
-import { caRootPath, describeCertificate, trustState } from '../src/harness/trust.js';
+import { caRootPath, describeCertificate, trustState, removeCommandFor } from '../src/harness/trust.js';
 
 let tmp;
 before(() => {
@@ -453,6 +453,26 @@ describe('certificate trust', () => {
     const junk = join(tmp, 'junk.pem');
     writeFileSync(junk, 'this is not a certificate', 'utf8');
     assert.equal(describeCertificate(junk), null);
+  });
+
+  test('both digests are recorded, because platforms disagree about which identifies a certificate', () => {
+    // Windows certutil prints "Cert Hash(sha1)". Comparing a SHA-256
+    // fingerprint against that output never matches, so verification reported
+    // "absent" while installs were succeeding -- which left roots in the store
+    // that nothing recorded and nothing would ever remove.
+    const c = describeCertificate(FIXTURE);
+    assert.match(c.fingerprint, /^[0-9a-f]{64}$/, 'sha-256, for platforms that report it');
+    assert.match(c.sha1, /^[0-9a-f]{40}$/, 'sha-1, which is what Windows reports');
+    assert.notEqual(c.fingerprint.slice(0, 40), c.sha1, 'they are different digests, not a truncation');
+  });
+
+  test('the removal command names the exact certificate, never a subject', () => {
+    // Several authorities share the subject "Caddy Local Authority". Deleting
+    // by name would remove certificates this project never installed.
+    const c = describeCertificate(FIXTURE);
+    const cmd = removeCommandFor(c);
+    assert.ok(cmd.includes(process.platform === 'darwin' ? c.sha1.toUpperCase() : c.sha1) || cmd.includes('nssdb'), cmd);
+    assert.ok(!/["']?Caddy Local Authority["']?\s*$/.test(cmd), 'must not delete by subject name');
   });
 
   test('a certificate that was never installed reports absent', () => {

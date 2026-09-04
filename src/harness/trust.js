@@ -57,7 +57,13 @@ export function describeCertificate(path) {
     const cert = new X509Certificate(readFileSync(path));
     return {
       path,
+      // Both digests, because platforms disagree about which one identifies a
+      // certificate. Windows certutil prints "Cert Hash(sha1)"; comparing a
+      // SHA-256 fingerprint against that output never matches, so every
+      // verification reported "absent" while the install had actually
+      // succeeded -- which left roots installed that nothing recorded.
       fingerprint: cert.fingerprint256.replace(/:/g, '').toLowerCase(),
+      sha1: cert.fingerprint.replace(/:/g, '').toLowerCase(),
       subject: cert.subject.replace(/\n/g, ', '),
       validTo: cert.validTo,
     };
@@ -76,7 +82,7 @@ export function describeCertificate(path) {
  * @param {string} fingerprint  SHA-256, lowercase hex, no separators.
  * @returns {'present'|'absent'|'unknown'}
  */
-export function trustState(fingerprint) {
+export function trustState(fingerprint, sha1 = null) {
   if (!fingerprint) return 'unknown';
   const normalise = (s) => String(s).replace(/[\s:]/g, '').toLowerCase();
 
@@ -90,7 +96,11 @@ export function trustState(fingerprint) {
         timeout: 20_000,
         windowsHide: true,
       });
-      return normalise(out).includes(fingerprint) ? 'present' : 'absent';
+      // certutil -store reports "Cert Hash(sha1)", so SHA-1 is what can be
+      // matched here. Falling back to the SHA-256 value would silently never
+      // match, which is worse than not looking at all.
+      const needle = sha1 ?? fingerprint;
+      return normalise(out).includes(needle) ? 'present' : 'absent';
     }
 
     if (OS === 'darwin') {
@@ -110,8 +120,9 @@ export function trustState(fingerprint) {
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 20_000,
     });
-    // NSS lists nicknames rather than fingerprints, so match on Caddy's.
-    return /Caddy Local Authority/i.test(out) ? 'present' : 'absent';
+    // NSS lists nicknames rather than fingerprints, so match the one we install
+    // under. The constant is shared with the installer so they cannot drift.
+    return out.includes(NSS_NICKNAME) ? 'present' : 'absent';
   } catch {
     return 'unknown';
   }
@@ -129,12 +140,26 @@ export function trustState(fingerprint) {
  * @param {Record<string,string>} [opts.env]
  * @param {(m: string) => void} [opts.log]
  */
-export async function trustCa({ caddyPath, env = process.env, log = () => {} }) {
-  const before = describeCertificate(caRootPath(env));
+export async function trustCa({ env = process.env, log = () => {}, certPath = caRootPath(env) } = {}) {
+  // Deliberately not `caddy trust`. That command fetches the authority through
+  // Caddy's admin API, and the generated Caddyfile turns the admin API off --
+  // it is an unauthenticated control socket that nothing here needs. Installing
+  // the root directly keeps that hardening and makes the step verifiable: we
+  // know exactly which certificate went in, so we can prove it came out.
+  const cert = describeCertificate(certPath);
+  if (!cert) {
+    const e = new Error(
+      `No root certificate at ${certPath}.\n\n` +
+        'Caddy creates it the first time it serves TLS, so the proxy has to be running before\n' +
+        'the authority exists to install.',
+    );
+    e.code = 'NO_CA';
+    throw e;
+  }
 
-  log('installing the local certificate authority');
+  log(`installing the local certificate authority (${cert.fingerprint.slice(0, 16)}...)`);
   try {
-    await run(caddyPath, ['trust'], { env, timeout: 120_000, windowsHide: true });
+    await installRoot(certPath);
   } catch (err) {
     const e = new Error(
       `Could not install the certificate authority.\n\n${firstLines(err)}\n\n` +
@@ -144,18 +169,70 @@ export async function trustCa({ caddyPath, env = process.env, log = () => {} }) 
     throw e;
   }
 
-  // Caddy creates the root on first use, so read it after rather than before.
-  const cert = describeCertificate(caRootPath(env)) ?? before;
-  if (!cert) {
-    const e = new Error(`Caddy reported success but no root certificate was found at ${caRootPath(env)}.`);
+  const state = trustState(cert.fingerprint, cert.sha1);
+  if (state === 'absent') {
+    // The install claimed success and the store disagrees, so something is in
+    // an unknown state. Undo it rather than leave a root behind that nothing
+    // recorded and therefore nothing will ever remove. Refusing to record it
+    // without also removing it is exactly how a machine accumulates orphans.
+    let rolledBack = false;
+    try {
+      await removeRoot(cert);
+      rolledBack = trustState(cert.fingerprint, cert.sha1) !== 'present';
+    } catch {
+      /* reported in the message below */
+    }
+
+    const e = new Error(
+      'The install command reported success but the certificate is not in the trust store.\n\n' +
+        (rolledBack
+          ? 'It has been removed again, so nothing was left behind.'
+          : 'It could NOT be removed again, so a certificate may be installed that nothing is\n' +
+            `tracking. Remove it by hand:\n\n  ${removeCommandFor(cert)}`),
+    );
     e.code = 'TRUST_FAILED';
+    e.certificate = cert;
     throw e;
   }
 
-  const state = trustState(cert.fingerprint);
-  log(`certificate authority installed (${cert.fingerprint.slice(0, 16)}...), store reports ${state}`);
+  log(`certificate authority installed, store reports ${state}`);
   return { ...cert, trustedAt: new Date().toISOString(), verified: state };
 }
+
+/**
+ * Add a root to the platform trust store.
+ *
+ * Each platform in its own terms, and each chosen to need as little privilege
+ * as it can: the per-user store on Windows, Chrome's own NSS database on Linux.
+ * macOS has no per-user equivalent that browsers honour, so it prompts.
+ */
+async function installRoot(certPath) {
+  if (OS === 'win32') {
+    // -user writes the current account's store, which Chrome and Edge read and
+    // which needs no elevation.
+    return run('certutil', ['-user', '-addstore', '-f', 'Root', certPath], { timeout: 120_000, windowsHide: true });
+  }
+
+  if (OS === 'darwin') {
+    return run(
+      'sudo',
+      ['security', 'add-trusted-cert', '-d', '-r', 'trustRoot', '-k', '/Library/Keychains/System.keychain', certPath],
+      { timeout: 120_000 },
+    );
+  }
+
+  // Linux: Chrome reads ~/.pki/nssdb and needs no root for it.
+  const nssdb = join(homedir(), '.pki', 'nssdb');
+  await run('mkdir', ['-p', nssdb], { timeout: 20_000 }).catch(() => {});
+  return run(
+    'certutil',
+    ['-d', `sql:${nssdb}`, '-A', '-t', 'C,,', '-n', NSS_NICKNAME, '-i', certPath],
+    { timeout: 120_000 },
+  );
+}
+
+/** The nickname the Linux trust check looks for, so the two cannot drift. */
+const NSS_NICKNAME = 'notlocalhost local authority';
 
 /**
  * Remove the CA, and report honestly whether it is gone.
@@ -164,16 +241,16 @@ export async function trustCa({ caddyPath, env = process.env, log = () => {} }) 
  * things to undo, and abandoning them because one step failed leaves more
  * behind than continuing and saying so.
  */
-export async function untrustCa({ caddyPath, fingerprint, env = process.env, log = () => {} }) {
+export async function untrustCa({ fingerprint, certificate, env = process.env, log = () => {} } = {}) {
   log('removing the local certificate authority');
   let error = null;
   try {
-    await run(caddyPath, ['untrust'], { env, timeout: 120_000, windowsHide: true });
+    await removeRoot(certificate ?? fingerprint);
   } catch (err) {
     error = firstLines(err);
   }
 
-  const state = fingerprint ? trustState(fingerprint) : 'unknown';
+  const state = fingerprint ? trustState(fingerprint, certificate?.sha1) : 'unknown';
 
   return {
     removed: state === 'absent',
@@ -193,6 +270,35 @@ export async function untrustCa({ caddyPath, fingerprint, env = process.env, log
           ? ['The trust store could not be queried, so removal could not be confirmed. Check it by hand before assuming it is gone.']
           : [],
   };
+}
+
+/**
+ * Remove the root, in the same store it was added to.
+ *
+ * Windows deletes by SHA-1 thumbprint, which certutil accepts; macOS deletes by
+ * the certificate file; NSS deletes by nickname. Each is addressed the way that
+ * platform addresses certificates, rather than by a name several could share.
+ */
+async function removeRoot(cert) {
+  if (OS === 'win32') {
+    // By thumbprint, not by name. Several authorities can share a subject, and
+    // deleting by name would remove certificates this project never installed.
+    const id = typeof cert === 'string' ? cert : cert?.sha1;
+    if (!id) throw new Error('no thumbprint recorded, so the exact certificate cannot be identified');
+    return run('certutil', ['-user', '-delstore', 'Root', id], { timeout: 120_000, windowsHide: true });
+  }
+  if (OS === 'darwin') {
+    return run('sudo', ['security', 'delete-certificate', '-c', 'Caddy Local Authority', '-t'], { timeout: 120_000 });
+  }
+  const nssdb = join(homedir(), '.pki', 'nssdb');
+  return run('certutil', ['-d', `sql:${nssdb}`, '-D', '-n', NSS_NICKNAME], { timeout: 120_000 });
+}
+
+/** The exact command to remove one certificate, for when we could not. */
+export function removeCommandFor(cert) {
+  if (OS === 'win32') return `certutil -user -delstore Root ${cert?.sha1 ?? '<thumbprint>'}`;
+  if (OS === 'darwin') return `sudo security delete-certificate -Z ${cert?.sha1?.toUpperCase() ?? '<thumbprint>'}`;
+  return `certutil -d sql:$HOME/.pki/nssdb -D -n "${NSS_NICKNAME}"`;
 }
 
 function firstLines(err) {

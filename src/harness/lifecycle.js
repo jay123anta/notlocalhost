@@ -186,14 +186,6 @@ export async function up(opts = {}) {
     log(result.changed ? `added ${config.sites.length} hostnames to ${hostsFile}` : 'hosts file already had the entries');
   }
 
-  // ---- certificate authority ----------------------------------------------
-  if (trust) {
-    const cert = await trustCa({ caddyPath: caddy.path, env, log });
-    state.caTrusted = true;
-    state.ca = cert;
-    writeState(state, cwd);
-  }
-
   // ---- process -------------------------------------------------------------
   const logPath = join(harnessDir(cwd), 'caddy.log');
   const child = spawn(caddy.path, ['run', '--config', caddyfilePath, '--adapter', 'caddyfile'], {
@@ -208,6 +200,22 @@ export async function up(opts = {}) {
   state.running = { pid: child.pid, startedAt: new Date().toISOString(), httpPort, httpsPort, logPath };
   writeState(state, cwd);
   log(`proxy started (pid ${child.pid})`);
+
+  // ---- certificate authority ----------------------------------------------
+  // After the proxy, not before. Caddy generates its authority the first time
+  // it serves TLS, so there is nothing to install until it is running.
+  if (trust) {
+    const certPath = caRootPath(env);
+    const appeared = await waitForFile(certPath, 20_000);
+    if (!appeared) {
+      log(`no certificate authority appeared at ${certPath}; skipping trust`);
+    } else {
+      const cert = await trustCa({ env, log, certPath });
+      state.caTrusted = true;
+      state.ca = cert;
+      writeState(state, cwd);
+    }
+  }
 
   return { config, state, caddy, caddyfilePath, sites: config.sites, logPath };
 }
@@ -245,13 +253,8 @@ export async function down(opts = {}) {
   }
 
   // ---- certificate authority ----------------------------------------------
-  if (state.caTrusted && state.caddy?.path) {
-    const result = await untrustCa({
-      caddyPath: state.caddy.path,
-      fingerprint: state.ca?.fingerprint,
-      env,
-      log,
-    });
+  if (state.caTrusted) {
+    const result = await untrustCa({ fingerprint: state.ca?.fingerprint, certificate: state.ca, env, log });
     steps.push({
       what: 'remove the certificate authority',
       ok: result.removed,
@@ -315,6 +318,16 @@ function readConfigProject(cwd, state) {
 function openLog(path) {
   mkdirSync(dirname(path), { recursive: true });
   return openSync(path, 'a');
+}
+
+/** Wait for a file to appear, because Caddy writes its authority lazily. */
+async function waitForFile(path, budgetMs, stepMs = 250) {
+  const deadline = Date.now() + budgetMs;
+  while (Date.now() < deadline) {
+    if (existsSync(path)) return true;
+    await new Promise((r) => setTimeout(r, stepMs));
+  }
+  return existsSync(path);
 }
 
 export function isAlive(pid) {

@@ -77,7 +77,13 @@ export async function runHarnessCommand(command, options, io) {
       }
 
       const log = (m) => stderr.write(`${c.dim(`  ${m}`)}\n`);
-      const result = await up({ cwd: process.cwd(), consent: true, log });
+      const result = await up({
+        cwd: process.cwd(),
+        consent: true,
+        httpPort: options.httpPort,
+        httpsPort: options.httpsPort,
+        log,
+      });
 
       stdout.write(`\n${c.green(c.bold('Up.'))}\n\n`);
       for (const line of summariseSites(result.config)) stdout.write(`  ${line}\n`);
