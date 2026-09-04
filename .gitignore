@@ -4,3 +4,6 @@ notlocalhost-report.html
 notlocalhost-report.json
 .DS_Store
 *.log
+
+# Stage 2 harness workspace: downloaded Caddy, generated config, local CA.
+.notlocalhost/
