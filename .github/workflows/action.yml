@@ -1,0 +1,128 @@
+name: action
+
+# The composite action in action.yml is published alongside the CLI, and until
+# the package existed on npm it could not be executed at all. This exercises it
+# the way a user would.
+on:
+  push:
+    branches: [main]
+    paths: ['action.yml', '.github/workflows/action.yml']
+  pull_request:
+    paths: ['action.yml', '.github/workflows/action.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # The case that matters most: someone adds the action to their workflow and
+  # changes nothing else. If this needs a setup-chrome step to work, the action
+  # documentation has to say so, and right now it does not.
+  bare:
+    name: no browser setup, as a user would first try it
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Start an application to analyze
+        run: |
+          node test/fixtures/lying-app.mjs --port 3000 --api-port 4000 --quiet &
+          for _ in $(seq 1 40); do
+            node -e 'require("net").connect(3000,"127.0.0.1").on("connect",()=>process.exit(0)).on("error",()=>process.exit(1))' && break
+            sleep 0.25
+          done
+
+      - name: What browsers does a bare runner actually have?
+        run: npx --yes notlocalhost@latest --list-browsers || echo "none found on the well-known paths"
+
+      - name: Run the action
+        id: nlh
+        uses: ./
+        continue-on-error: true
+        with:
+          url: http://localhost:3000
+          fail-on: will-break
+          domain: acme.com
+          upload-artifact: 'false'
+
+      # The fixture is deliberately full of will-break findings, so a working
+      # action must exit 1 and report counts. Exit 5 means it could not find a
+      # browser, which is a documentation bug rather than a code one.
+      - name: Check what the action reported
+        run: |
+          echo "exit-code  : ${{ steps.nlh.outputs.exit-code }}"
+          echo "will-break : ${{ steps.nlh.outputs.will-break }}"
+          echo "may-break  : ${{ steps.nlh.outputs.may-break }}"
+          echo "info       : ${{ steps.nlh.outputs.info }}"
+          echo "report     : ${{ steps.nlh.outputs.report-path }}"
+
+          case "${{ steps.nlh.outputs.exit-code }}" in
+            1)
+              echo "The action works on a bare runner."
+              [ "${{ steps.nlh.outputs.will-break }}" -gt 0 ] || { echo "::error::exit 1 but no will-break findings"; exit 1; }
+              ;;
+            5)
+              echo "::error title=Action needs a browser::The action exited 5 on a runner with no browser setup. action.yml must either install one or document that the caller has to."
+              exit 1
+              ;;
+            *)
+              echo "::error::Unexpected exit ${{ steps.nlh.outputs.exit-code }} from the action."
+              exit 1
+              ;;
+          esac
+
+  # The same thing with an explicit browser, which is what the README will
+  # recommend if the bare case turns out to need it.
+  with-chrome:
+    name: with an explicit browser
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: browser-actions/setup-chrome@v1
+        id: chrome
+        with:
+          chrome-version: stable
+
+      - name: Start an application to analyze
+        run: |
+          node test/fixtures/lying-app.mjs --port 3000 --api-port 4000 --quiet &
+          for _ in $(seq 1 40); do
+            node -e 'require("net").connect(3000,"127.0.0.1").on("connect",()=>process.exit(0)).on("error",()=>process.exit(1))' && break
+            sleep 0.25
+          done
+
+      - name: Run the action
+        id: nlh
+        uses: ./
+        continue-on-error: true
+        env:
+          NOTLOCALHOST_BROWSER_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        with:
+          url: http://localhost:3000
+          flow: ./evidence/login-flow.mjs
+          fail-on: will-break
+          domain: acme.com
+          artifact-name: action-selftest-report
+
+      - name: The flow must have revealed post-login cookies
+        run: |
+          echo "exit-code : ${{ steps.nlh.outputs.exit-code }}"
+          test -f "${{ steps.nlh.outputs.json-path }}" || { echo "::error::no JSON document written"; exit 1; }
+          node -e '
+            const doc = require(process.argv[1]);
+            if (!doc.coverage.flow?.ok) { console.error("::error::the flow input did not run"); process.exit(1); }
+            const names = doc.findings.find(f => f.id === "cookie.inventory")?.evidence.map(e => e.label) ?? [];
+            if (!names.includes("connect.sid")) {
+              console.error("::error::post-login cookies missing; the flow input is not being passed through");
+              process.exit(1);
+            }
+            console.log("flow ran, cookies seen:", names.join(", "));
+          ' "${{ steps.nlh.outputs.json-path }}"
