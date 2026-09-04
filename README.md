@@ -384,7 +384,7 @@ cold npx        11.5 s   install from empty cache + full analysis
 ```
 git clone https://github.com/jay123anta/notlocalhost
 cd notlocalhost && npm install
-npm test              # 104 tests, unit + end-to-end against a live server
+npm test              # unit, end-to-end against a live server, and the report
 npm run lint          # syntax and the invariants above
 npm run evidence      # re-verify every RFC claim against your browser
 npm run fixture       # start the deliberately dishonest fixture app

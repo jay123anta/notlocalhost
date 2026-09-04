@@ -92,7 +92,7 @@ export async function analyze(options) {
   });
 
   const model = createDeploymentModel({ domain, crossSite, explicit: map });
-  const ctx = { capture, model, openPorts, targetUrl: url };
+  const ctx = { capture, model, openPorts, targetUrl: url, platform: process.platform };
   const { findings, moduleErrors } = runRules(ctx);
 
   const counts = {

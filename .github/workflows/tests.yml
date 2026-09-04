@@ -203,6 +203,15 @@ jobs:
             exit 1
           fi
 
+      # The suite above exercises the source tree. This exercises the artefact a
+      # user actually installs: pack, install into a throwaway directory, and
+      # drive every documented command, output format and exit code.
+      - name: The packed artefact must work end to end
+        shell: bash
+        env:
+          NOTLOCALHOST_BROWSER_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: npm run smoke
+
       - name: The HTML report must open from the filesystem with no server
         shell: bash
         env:

@@ -46,7 +46,8 @@
     "test:unit": "node --test test/unit.test.js",
     "test:e2e": "node --test test/e2e.test.js",
     "fixture": "node test/fixtures/lying-app.mjs",
-    "test:report": "node --test test/report.test.js"
+    "test:report": "node --test test/report.test.js",
+    "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
     "playwright-core": "^1.56.0"

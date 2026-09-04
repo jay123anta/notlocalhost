@@ -9,6 +9,7 @@ import { parseSetCookie, parseDocumentCookieWrite, effectiveSameSite } from '../
 import { inspectCookieForConditionalFlags, scanSourceForConditionalFlags } from '../collect/conditional-flags.js';
 import { finding, REF } from './finding.js';
 import { parseOrigin, isLoopbackHost } from '../collect/origins.js';
+import { describeSystemPort } from '../collect/port-scan.js';
 
 /** Names that mean "losing this cookie logs the user out or breaks CSRF". */
 const AUTH_NAME_RE =
@@ -27,10 +28,11 @@ function looksLikeAuthCookie(cookie) {
  * @param {ReturnType<import('../collect/origins.js').createDeploymentModel>} ctx.model
  * @param {number[]} ctx.openPorts
  * @param {string} ctx.targetUrl
+ * @param {string} [ctx.platform] Overridable so port labelling is testable.
  * @returns {import('./finding.js').Finding[]}
  */
 export function cookieRules(ctx) {
-  const { capture, model, openPorts, targetUrl } = ctx;
+  const { capture, model, openPorts, targetUrl, platform = process.platform } = ctx;
   const target = parseOrigin(targetUrl);
   const out = [];
 
@@ -298,14 +300,20 @@ export function cookieRules(ctx) {
   const hostOnly = uniq.filter((c) => !c.domain);
   if (target?.isLoopback && hostOnly.length) {
     const others = openPorts.filter((p) => String(p) !== target.port);
-    const severity = others.length ? 'will-break' : 'info';
+    // A system service on a well-known port is in the same jar, but it is not
+    // another app of yours and nothing can be done about it. Counting it as one
+    // would put a permanent will-break on every Mac.
+    const devServers = others.filter((p) => !describeSystemPort(p, platform));
+    const severity = devServers.length ? 'will-break' : 'info';
     out.push(
       finding({
         id: 'cookie.port-sharing-hazard',
         severity,
-        title: others.length
-          ? `Cookies from ${target.hostPort} are also sent to ${others.length} other server${others.length === 1 ? '' : 's'} on this machine`
-          : 'Cookies on localhost are not isolated by port',
+        title: devServers.length
+          ? `Cookies from ${target.hostPort} are also sent to ${devServers.length} other server${devServers.length === 1 ? '' : 's'} on this machine`
+          : others.length
+            ? 'Cookies on localhost are not isolated by port'
+            : 'Cookies on localhost are not isolated by port',
         summary:
           'Cookies have no concept of a port. RFC 6265 section 8.5 states it plainly: "cookies do not provide ' +
           'isolation by port". The Set-Cookie grammar has no port attribute, and the browser keys the jar by ' +
@@ -325,7 +333,14 @@ export function cookieRules(ctx) {
           },
           {
             label: 'other listeners on this host',
-            value: others.length ? others.map((p) => `127.0.0.1:${p}`).join(', ') : 'none found on the common dev ports',
+            value: others.length
+              ? others
+                  .map((p) => {
+                    const system = describeSystemPort(p, platform);
+                    return `127.0.0.1:${p}${system ? `  (${system})` : ''}`;
+                  })
+                  .join('\n')
+              : 'none found on the common dev ports',
           },
         ],
         fix: [

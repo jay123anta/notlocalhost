@@ -16,7 +16,8 @@ import {
   scanSourceForConditionalFlags,
   inspectCookieForConditionalFlags,
 } from '../src/collect/conditional-flags.js';
-import { scanLoopbackPorts } from '../src/collect/port-scan.js';
+import { scanLoopbackPorts, describeSystemPort } from '../src/collect/port-scan.js';
+import { cookieRules } from '../src/rules/cookies.js';
 import { finding, atOrAbove, sortFindings, severityRank } from '../src/rules/finding.js';
 import { parseArgs, run } from '../src/cli.js';
 import { _internal as sessionInternal } from '../src/session.js';
@@ -334,6 +335,57 @@ describe('port scanning stays on loopback', () => {
     } finally {
       srv.close();
     }
+  });
+});
+
+describe('system-owned ports are labelled, not counted as dev servers', () => {
+  test('macOS AirPlay ports are recognised', () => {
+    assert.match(describeSystemPort(5000, 'darwin'), /AirPlay/);
+    assert.match(describeSystemPort(7000, 'darwin'), /AirPlay/);
+  });
+
+  test('the same ports are not special on other platforms', () => {
+    assert.equal(describeSystemPort(5000, 'linux'), null);
+    assert.equal(describeSystemPort(5000, 'win32'), null);
+  });
+
+  test('an ordinary dev port is never labelled', () => {
+    assert.equal(describeSystemPort(3000, 'darwin'), null);
+    assert.equal(describeSystemPort(8080, 'darwin'), null);
+  });
+
+  test('a run whose only neighbours are system ports is info, not will-break', () => {
+    // Otherwise every Mac gets a permanent will-break for AirPlay, and a
+    // finding that is always present is one people learn to skip past.
+    const capture = {
+      setCookies: [{ raw: 'sid=abc; Path=/; HttpOnly', url: 'http://localhost:3000/', phase: 'response' }],
+      instrumentation: [],
+      blockedCookies: [],
+      requests: [],
+      bodies: [],
+      finalUrl: 'http://localhost:3000/',
+    };
+    const model = createDeploymentModel({ domain: 'example.com' });
+
+    const onlySystem = cookieRules({
+      capture,
+      model,
+      openPorts: [5000, 7000],
+      targetUrl: 'http://localhost:3000',
+      platform: 'darwin',
+    }).find((f) => f.id === 'cookie.port-sharing-hazard');
+
+    const realNeighbour = cookieRules({
+      capture,
+      model,
+      openPorts: [4000],
+      targetUrl: 'http://localhost:3000',
+    }).find((f) => f.id === 'cookie.port-sharing-hazard');
+
+    assert.ok(onlySystem, 'the rule should still fire and explain the port model');
+    assert.equal(onlySystem.severity, 'info', 'AirPlay alone must not be a will-break');
+    assert.match(JSON.stringify(onlySystem.evidence), /AirPlay/, 'the port should be labelled');
+    assert.equal(realNeighbour.severity, 'will-break', 'a real neighbouring dev server is will-break');
   });
 });
 
