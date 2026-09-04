@@ -3,10 +3,10 @@
  *
  * Caddy does the two hard things this project refuses to reimplement: TLS
  * termination, and a local certificate authority. `tls internal` makes it
- * generate its own CA; `caddy trust` and `caddy untrust` install and remove
- * that CA from the platform trust store. Standing on that keeps the promise of
- * one runtime dependency, because authoring X.509 certificates in Node would
- * need a second one.
+ * generate its own CA. Standing on that keeps the promise of one runtime
+ * dependency, because authoring X.509 certificates in Node would need a second
+ * one. Installing that CA into the platform trust store is handled in
+ * trust.js rather than by `caddy trust` -- see the note there.
  *
  * Two rules govern everything here:
  *

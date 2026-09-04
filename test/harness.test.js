@@ -336,6 +336,32 @@ describe('configuration', () => {
     assert.ok(changes.some((c) => /No DNS or hosts changes/i.test(c.what)));
   });
 
+  // The disclosure is what someone reads before deciding, so it has to describe
+  // the run they are about to have, not a default one they are not having.
+  test('the ports actually being bound are the ports disclosed', () => {
+    const cfg = defaultConfig({ cwd: '/p/demo', upstreams: [{ port: 3000 }] });
+    const proxy = (o) => describeChanges(cfg, o).find((c) => /proxy/i.test(c.what));
+
+    assert.match(proxy({ httpPort: 8080, httpsPort: 8443 }).what, /8080 and 8443/);
+    assert.ok(!/\b80 and 443\b/.test(proxy({ httpPort: 8080, httpsPort: 8443 }).what));
+    assert.match(proxy({}).what, /80 and 443/, 'with no ports given, the defaults are named as defaults');
+  });
+
+  test('high ports do not claim to need a password on macOS or Linux', () => {
+    const cfg = defaultConfig({ cwd: '/p/demo', upstreams: [{ port: 3000 }] });
+    const proxy = (o) => describeChanges(cfg, o).find((c) => /proxy/i.test(c.what));
+
+    assert.equal(proxy({ httpPort: 8080, httpsPort: 8443 }).elevation, false);
+    assert.equal(proxy({ httpPort: 80, httpsPort: 443 }).elevation, process.platform !== 'win32');
+  });
+
+  test('the certificate is disclosed as removed by fingerprint, not by name', () => {
+    const cfg = defaultConfig({ cwd: '/p/demo', upstreams: [{ port: 3000 }] });
+    const ca = describeChanges(cfg, {}).find((c) => /certificate authority/i.test(c.what));
+    assert.match(ca.reversedBy, /fingerprint/i);
+    assert.ok(!/caddy untrust/i.test(ca.reversedBy), 'that command needs the admin API this project disables');
+  });
+
   test('fileDigest is null for a file that does not exist', () => {
     assert.equal(fileDigest(join(tmp, 'nope')), null);
   });

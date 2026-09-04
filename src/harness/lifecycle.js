@@ -144,7 +144,7 @@ export async function up(opts = {}) {
   if (!consent) {
     const e = new Error('up() requires explicit consent; the caller must obtain it first.');
     e.code = 'NO_CONSENT';
-    e.changes = describeChanges(config, {});
+    e.changes = describeChanges(config, { httpPort, httpsPort });
     throw e;
   }
 

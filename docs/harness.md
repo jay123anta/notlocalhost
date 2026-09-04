@@ -67,9 +67,9 @@ between subdomains?** If not, take the default and never type a password.
 
 | What changes | Undone by |
 |---|---|
-| A certificate authority, trusted for this machine | `down` runs `caddy untrust` and verifies the certificate is gone from the store |
+| A certificate authority, trusted for this machine | `down` removes it by its exact fingerprint and verifies it is gone from the store |
 | Lines in the hosts file (`--tier test` only) | `down` removes exactly the marked block and asserts the file matches its digest from before the change |
-| A proxy on ports 80 and 443, while `up` is running | `down` stops it. Nothing is installed as a service |
+| A proxy on ports 80 and 443 -- or whichever ports you give `up` -- while it is running | `down` stops it. Nothing is installed as a service |
 | A `.notlocalhost/` directory in your project | `down --purge` deletes it |
 
 Three things are worth knowing about how that reversal is built.

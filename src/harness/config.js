@@ -167,7 +167,7 @@ export function fileDigest(path) {
  * reads only this should be able to decide, and should never be surprised
  * afterwards.
  */
-export function describeChanges(cfg, { caddySource } = {}) {
+export function describeChanges(cfg, { caddySource, httpPort, httpsPort } = {}) {
   const tier = TIERS[cfg.tier];
   const out = [];
 
@@ -176,7 +176,9 @@ export function describeChanges(cfg, { caddySource } = {}) {
     detail:
       'Caddy generates a local CA and adds it to the trust store so the browser accepts the certificates it issues. ' +
       'It signs nothing but the hostnames below.',
-    reversedBy: '`notlocalhost down` runs `caddy untrust`, which removes it.',
+    reversedBy:
+      '`notlocalhost down` removes it by its exact fingerprint -- never by name, which would also remove ' +
+      'certificates this tool never installed -- and then verifies it is gone from the store.',
     elevation: process.platform !== 'win32',
   });
 
@@ -196,11 +198,21 @@ export function describeChanges(cfg, { caddySource } = {}) {
     });
   }
 
+  // Ports matter here beyond accuracy: on macOS and Linux, 80 and 443 need
+  // elevation and high ports do not, so a fixed sentence would ask for a
+  // password the run does not need.
+  const known = httpPort !== undefined && httpsPort !== undefined;
+  const http = httpPort ?? 80;
+  const https = httpsPort ?? 443;
+  const privileged = http < 1024 || https < 1024;
+
   out.push({
-    what: 'A local proxy on ports 80 and 443',
+    what: known
+      ? `A local proxy on ports ${http} and ${https}`
+      : 'A local proxy on ports 80 and 443, unless `up` is given different ones',
     detail: `Caddy${caddySource === 'downloaded' ? ', downloaded into .notlocalhost/ and checksum-verified,' : ''} terminates TLS and forwards to your dev server. It runs only while \`up\` is running.`,
     reversedBy: '`notlocalhost down` stops it. Nothing is installed as a service.',
-    elevation: process.platform !== 'win32',
+    elevation: process.platform !== 'win32' && privileged,
   });
 
   out.push({

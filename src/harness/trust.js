@@ -13,10 +13,14 @@
  *   - Removal is checked, not assumed. `down` reports whether the store still
  *     contains the fingerprint, and says so plainly when it does.
  *
- * Caddy generates and installs the CA (`caddy trust` / `caddy untrust`), so no
- * X.509 authoring happens here -- that would cost a second runtime dependency.
- * Node reads certificates natively via crypto.X509Certificate, which is enough
- * to fingerprint one.
+ * Caddy generates the CA, so no X.509 authoring happens here -- that would cost
+ * a second runtime dependency. Node reads certificates natively via
+ * crypto.X509Certificate, which is enough to fingerprint one.
+ *
+ * Installing it is done here rather than by `caddy trust`, which reaches the
+ * authority through Caddy's admin API. The generated Caddyfile disables that
+ * API deliberately, because it is an unauthenticated control socket. Reading
+ * the root off disk keeps the hardening and makes the step verifiable.
  */
 import { X509Certificate } from 'node:crypto';
 import { execFile, execFileSync } from 'node:child_process';

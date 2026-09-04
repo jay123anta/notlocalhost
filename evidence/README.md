@@ -305,6 +305,57 @@ that always happen. Only body-scanning findings vary.
 
 ---
 
+## Reversal, verified on a real machine
+
+The harness claims `down` leaves the machine as it found it. That claim is
+worth nothing asserted, so it was measured on a real Windows 11 trust store
+rather than a temporary directory.
+
+The count of trusted roots was taken before the harness had ever run: **70** in
+`CurrentUser\Root`, 70 in `LocalMachine\Root`.
+
+```
+init                      # changes nothing, prints what up would change
+up --yes --http-port 8080 --https-port 8443
+    proxy started (pid 17436)
+    installing the local certificate authority (730e8245bf522761...)
+    certificate authority installed, store reports present
+down
+    done    stop the proxy
+    done    remove the certificate authority
+            removed from the trust store, verified absent
+```
+
+Afterwards, `certutil -user -store Root | findstr "Caddy Local Authority"`
+printed nothing, and the root count was 70 again — the same number, not merely
+a store with no Caddy certificate in it. A count that matches rules out
+removing something else on the way past.
+
+**The bug this replaced is the more useful half of the record.** An earlier
+version compared a SHA-256 fingerprint against `certutil -store` output, which
+prints `Cert Hash(sha1)`. It could never match. Every install succeeded, every
+verification reported `absent`, and the guard then refused to *record* the
+trust — after the certificate was already in the store. Nothing recorded meant
+nothing for `down` to remove, and five roots accumulated across test runs with
+no trace in any ledger.
+
+Two things are worth taking from that:
+
+- **A check that succeeds by failing to look is worse than no check.** The
+  guard was the reason the orphans accumulated silently; without it the failure
+  would have been loud on the first run.
+- **Refusing to record without also removing is how a machine collects
+  orphans.** A half-completed change that goes unrecorded is strictly worse
+  than one that is recorded and reported as failed.
+
+Certificates now carry both digests, because platforms disagree about which one
+identifies a certificate; Windows is matched on the one it prints. A
+verification failure rolls the install back, and removal addresses the
+certificate by thumbprint, never by subject name — deleting by
+`"Caddy Local Authority"` would remove certificates this tool never installed.
+
+---
+
 ## What these runs do not show
 
 - Five apps is five apps. It is enough to demonstrate the failure class and to
@@ -315,6 +366,9 @@ that always happen. Only body-scanning findings vary.
   cookie behaviour has changed before and will change again.
 - Body-scanning findings vary between runs, as above. Cookie and header findings
   are stable.
+- The reversal above was verified on Windows only. The Linux and macOS paths
+  are covered by the lifecycle suite in CI, which proves byte-identical
+  restoration against temporary files, not against a real system trust store.
 - The starter apps were scaffolded on 2026-09-04. Defaults move. If a table above
   disagrees with a scaffold you generate today, the scaffold is right and this
   file is stale — please open an issue.
