@@ -189,23 +189,50 @@ describe('the gate: up, HTTPS, down, unchanged', { skip }, () => {
   });
 
   test('a real HTTPS request reaches the upstream through the proxy', async () => {
-    // Give Caddy a moment to bind and issue its certificate.
-    for (let i = 0; i < 40; i++) {
+    // Two separate questions, deliberately not in the same try.
+    //
+    // Waiting for Caddy to bind and generate its certificate is a race, so it
+    // retries. Whether the response is *correct* is not a race, and retrying
+    // an assertion means a genuine failure -- a missing X-Forwarded-Proto, a
+    // cookie without Secure -- gets swallowed and reported as a timeout. That
+    // puts the wrong bug on the screen, and this suite is the Stage 2 gate.
+    //
+    // The budget is generous because certificate generation on a cold CI
+    // runner under load is slow, and a gate that fails on a busy machine
+    // teaches people to re-run it rather than read it. Observed at ~10.5s on a
+    // loaded Windows box, which is exactly where the old 10s budget expired.
+    const DEADLINE_MS = 90_000;
+    const startedAt = Date.now();
+    let res = null;
+    let lastError = null;
+
+    while (Date.now() - startedAt < DEADLINE_MS) {
       try {
-        const res = await fetchInsecure(`https://app.gatetest.test:${HTTPS_PORT}/`);
-        assert.equal(res.status, 200);
-        assert.match(res.body, /upstream/);
-        // The upstream must be told the request arrived over TLS, or a
-        // framework deriving its own scheme keeps emitting http:// URLs.
-        assert.equal(res.headers['x-forwarded-proto-seen'], 'https');
-        // And a Secure cookie can now actually be set, which is the point.
-        assert.match(String(res.headers['set-cookie'] ?? ''), /Secure/);
-        return;
-      } catch {
+        res = await fetchInsecure(`https://app.gatetest.test:${HTTPS_PORT}/`);
+        break;
+      } catch (err) {
+        lastError = err;
         await new Promise((r) => setTimeout(r, 250));
       }
     }
-    assert.fail(`no HTTPS response from the proxy. Caddy log:\n${readLog()}`);
+
+    if (!res) {
+      const waited = Math.round((Date.now() - startedAt) / 1000);
+      assert.fail(
+        `no HTTPS response from the proxy after ${waited}s.\n` +
+          `last error: ${lastError?.message ?? 'none recorded'}\n` +
+          `Caddy log:\n${readLog()}`,
+      );
+    }
+
+    // From here every failure is a real one and is reported as itself.
+    assert.equal(res.status, 200);
+    assert.match(res.body, /upstream/);
+    // The upstream must be told the request arrived over TLS, or a framework
+    // deriving its own scheme keeps emitting http:// URLs.
+    assert.equal(res.headers['x-forwarded-proto-seen'], 'https');
+    // And a Secure cookie can now actually be set, which is the point.
+    assert.match(String(res.headers['set-cookie'] ?? ''), /Secure/);
   });
 
   test('down stops the proxy and restores the machine byte-for-byte', async () => {
