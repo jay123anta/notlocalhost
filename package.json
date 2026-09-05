@@ -1,6 +1,6 @@
 {
   "name": "notlocalhost",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Your localhost is lying to you. This tells you exactly how. Predicts what breaks when your dev server moves to a real HTTPS origin.",
   "keywords": [
     "localhost",
@@ -40,18 +40,19 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "test": "node --test test/compat.test.js test/unit.test.js test/e2e.test.js test/report.test.js test/harness.test.js test/lifecycle.test.js",
+    "test": "node scripts/check-test-output.mjs",
     "lint": "node scripts/syntax-check.mjs",
     "evidence": "node evidence/repro-port-sharing.mjs",
     "test:unit": "node --test test/unit.test.js",
     "test:e2e": "node --test test/e2e.test.js",
     "fixture": "node test/fixtures/lying-app.mjs",
     "test:report": "node --test test/report.test.js",
-    "smoke": "node scripts/smoke.mjs",
-    "prepublishOnly": "npm run lint && node scripts/prepublish-check.mjs",
-    "test:harness": "node --test test/harness.test.js",
     "test:compat": "node --test test/compat.test.js",
-    "test:lifecycle": "node --test test/lifecycle.test.js"
+    "test:harness": "node --test test/harness.test.js",
+    "test:lifecycle": "node --test test/lifecycle.test.js",
+    "test:raw": "node --test test/compat.test.js test/unit.test.js test/e2e.test.js test/report.test.js test/harness.test.js test/lifecycle.test.js",
+    "smoke": "node scripts/smoke.mjs",
+    "prepublishOnly": "npm run lint && node scripts/prepublish-check.mjs"
   },
   "dependencies": {
     "playwright-core": "^1.56.0"

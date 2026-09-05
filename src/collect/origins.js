@@ -42,6 +42,24 @@ export function isLoopbackHost(hostname) {
 }
 
 /**
+ * Does this hostname sit in the cookie jar that every other loopback port
+ * shares?
+ *
+ * Narrower than isLoopbackHost, and the difference is the whole point. Cookies
+ * are keyed by hostname, so `app.myproject.localhost` is loopback but has a jar
+ * of its own -- it shares nothing with the dev servers answering as
+ * `localhost`. Only the default names are in the common jar, and only those
+ * are what a scan of 127.0.0.1 can say anything about.
+ */
+export function sharesDefaultCookieJar(hostname) {
+  if (!hostname) return false;
+  const h = stripBrackets(hostname.toLowerCase());
+  if (h === 'localhost') return true;
+  if (h === '::1' || h === '0:0:0:0:0:0:0:1') return true;
+  return /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(h);
+}
+
+/**
  * Hosts that are local to the developer's machine or network but are not
  * loopback -- these do *not* get secure-context treatment over plain HTTP.
  */

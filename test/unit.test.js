@@ -1,4 +1,6 @@
 import { test, describe, before, after } from 'node:test';
+import http from 'node:http';
+import net from 'node:net';
 import assert from 'node:assert/strict';
 
 import { parseSetCookie, splitSetCookieHeader, effectiveSameSite } from '../src/collect/cookie-parser.js';
@@ -7,6 +9,7 @@ import {
   sameOrigin,
   sameSite,
   isLoopbackHost,
+  sharesDefaultCookieJar,
   parseOrigin,
   createDeploymentModel,
   classifyRequest,
@@ -16,8 +19,9 @@ import {
   scanSourceForConditionalFlags,
   inspectCookieForConditionalFlags,
 } from '../src/collect/conditional-flags.js';
-import { scanLoopbackPorts, describeSystemPort } from '../src/collect/port-scan.js';
+import { scanLoopbackPorts, describeSystemPort, speaksHttp } from '../src/collect/port-scan.js';
 import { cookieRules } from '../src/rules/cookies.js';
+import { analyseTapOutput } from '../scripts/check-test-output.mjs';
 import { finding, atOrAbove, sortFindings, severityRank } from '../src/rules/finding.js';
 import { parseArgs, run } from '../src/cli.js';
 import { _internal as sessionInternal } from '../src/session.js';
@@ -109,6 +113,21 @@ describe('origin and site classification', () => {
     }
     for (const h of ['example.com', 'localhost.example.com', '192.168.1.5']) {
       assert.equal(isLoopbackHost(h), false, `${h} should not be loopback`);
+    }
+  });
+
+  // The two predicates look alike and mean different things. Conflating them
+  // is what put a cookie hazard on hostnames that cannot have one.
+  test('the shared cookie jar is narrower than loopback', () => {
+    for (const h of ['localhost', 'LOCALHOST', '127.0.0.1', '127.1.2.3', '::1', '[::1]']) {
+      assert.equal(sharesDefaultCookieJar(h), true, `${h} is in the common jar`);
+    }
+    for (const h of ['app.localhost', 'api.myproject.localhost']) {
+      assert.equal(isLoopbackHost(h), true, `${h} is still loopback`);
+      assert.equal(sharesDefaultCookieJar(h), false, `${h} has a jar of its own`);
+    }
+    for (const h of ['example.com', '192.168.1.5', '', null, undefined]) {
+      assert.equal(sharesDefaultCookieJar(h), false, `${h} is not local at all`);
     }
   });
 
@@ -411,6 +430,29 @@ describe('system-owned ports are labelled, not counted as dev servers', () => {
       undefined,
       'a .localhost subdomain has its own jar and must not report the hazard',
     );
+  });
+
+  // "none found" is a claim about having looked. When no scan ran there is
+  // nothing to report either way, and saying "none" is the same shape of lie
+  // this rule exists to warn about.
+  test('with no scan, the finding says it did not look rather than "none found"', () => {
+    const capture = {
+      setCookies: [{ raw: 'sid=abc; Path=/; HttpOnly', url: 'http://localhost:3000/', phase: 'response' }],
+      instrumentation: [],
+      blockedCookies: [],
+      requests: [],
+      bodies: [],
+      finalUrl: 'http://localhost:3000/',
+    };
+    const model = createDeploymentModel({ domain: 'example.com' });
+    const evidenceFor = (extra) =>
+      cookieRules({ capture, model, openPorts: [], targetUrl: 'http://localhost:3000', ...extra })
+        .find((f) => f.id === 'cookie.port-sharing-hazard')
+        .evidence.find((e) => /other listeners/i.test(e.label)).value;
+
+    assert.match(evidenceFor({ portScanSkipped: true }), /not probed/i);
+    assert.doesNotMatch(evidenceFor({ portScanSkipped: true }), /none found/i);
+    assert.match(evidenceFor({}), /none found/i, 'a scan that ran and found nothing still says so');
   });
 
   test('a run whose only neighbours are system ports is info, not will-break', () => {
@@ -853,5 +895,103 @@ describe('reporters', () => {
     const lines = termInternal.wrapText(text, 30);
     for (const l of lines) assert.ok(l.length <= 30, `"${l}" is ${l.length} chars`);
     assert.equal(lines.join(' '), text);
+  });
+});
+
+describe('an open port is not a web server', () => {
+  let web;
+  let silent;
+  let webPort;
+  let silentPort;
+  const sockets = new Set();
+
+  before(async () => {
+    web = http.createServer((_, res) => res.end('ok'));
+    await new Promise((r) => web.listen(0, '127.0.0.1', r));
+    webPort = web.address().port;
+
+    // Answers a TCP connect and then says nothing, the way a database does.
+    // Sockets are tracked because close() waits on every live connection, and
+    // a server holding one silently never calls back.
+    silent = net.createServer((sock) => sockets.add(sock.on('close', () => sockets.delete(sock))));
+    await new Promise((r) => silent.listen(0, '127.0.0.1', r));
+    silentPort = silent.address().port;
+  });
+
+  after(async () => {
+    for (const sock of sockets) sock.destroy();
+    sockets.clear();
+    web.closeAllConnections?.();
+    await new Promise((r) => web.close(r));
+    await new Promise((r) => silent.close(r));
+  });
+
+  test('an HTTP server is recognised', async () => {
+    assert.equal(await speaksHttp(webPort), true);
+  });
+
+  test('a socket that accepts and stays silent is not', async () => {
+    assert.equal(await speaksHttp(silentPort, '127.0.0.1', 400), false);
+  });
+
+  test('a closed port is not', async () => {
+    assert.equal(await speaksHttp(1, '127.0.0.1', 400), false);
+  });
+});
+
+describe('the test run is judged by its output, not its exit code', () => {
+  // Recorded verbatim from the run where this happened: three assertions
+  // passed, the suite was cancelled for a leaked handle, and the summary still
+  // said "# fail 0" with exit status 0. It would have shipped.
+  const CANCELLED_RUN = [
+    '    ok 1 - an HTTP server is recognised',
+    '    ok 2 - a socket that accepts and stays silent is not',
+    '    ok 3 - a closed port is not',
+    '    1..3',
+    'not ok 16 - an open port is not a web server',
+    '  ---',
+    "  failureType: 'cancelledByParent'",
+    "  error: 'Promise resolution is still pending but the event loop has already resolved'",
+    '  ...',
+    '1..16',
+    '# tests 164',
+    '# pass 164',
+    '# fail 0',
+    '',
+  ].join('\n');
+
+  // Every case pins minimumTests rather than inheriting the constant: these
+  // assert on the analysis, not on how many tests this branch happens to
+  // contain, and they broke the moment the floor moved for the harness suites.
+  const CLEAN_RUN = ['ok 1 - fine', '1..1', '# tests 164', '# pass 164', '# fail 0', ''].join('\n');
+
+  test('a clean run is believed', () => {
+    assert.deepEqual(analyseTapOutput({ out: CLEAN_RUN, status: 0, minimumTests: 10 }), []);
+  });
+
+  test('a cancelled suite is caught even though it exited 0 with "# fail 0"', () => {
+    const problems = analyseTapOutput({ out: CANCELLED_RUN, status: 0, minimumTests: 10 });
+    assert.equal(problems.length, 1, JSON.stringify(problems));
+    assert.match(problems[0], /not ok 16/);
+  });
+
+  test('a suite that skips itself is caught', () => {
+    const tiny = ['ok 1 - one', '1..1', '# tests 1', '# pass 1', '# fail 0', ''].join('\n');
+    assert.match(analyseTapOutput({ out: tiny, status: 0, minimumTests: 10 })[0], /only 1 tests ran/);
+  });
+
+  test('output that stops early is not mistaken for success', () => {
+    const truncated = ['ok 1 - one', '# pass 1', ''].join('\n');
+    const problems = analyseTapOutput({ out: truncated, status: 0, minimumTests: 10 });
+    assert.equal(problems.length, 2, JSON.stringify(problems));
+    for (const p of problems) assert.match(p, /did not finish/);
+  });
+
+  test('CRLF output is parsed, not silently unmatched', () => {
+    assert.deepEqual(analyseTapOutput({ out: CLEAN_RUN.split('\n').join('\r\n'), status: 0, minimumTests: 10 }), []);
+  });
+
+  test('a non-zero exit is reported even when the TAP looks fine', () => {
+    assert.match(analyseTapOutput({ out: CLEAN_RUN, status: 1, minimumTests: 10 })[0], /exited 1/);
   });
 });

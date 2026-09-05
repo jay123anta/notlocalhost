@@ -142,3 +142,4 @@ export async function scanLoopbackPorts(opts = {}) {
   const results = await Promise.all(list.map((p) => probe(p, host, timeoutMs).then((open) => [p, open])));
   return results.filter(([, open]) => open).map(([p]) => p).sort((a, b) => a - b);
 }
+

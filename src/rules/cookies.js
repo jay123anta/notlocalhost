@@ -8,7 +8,7 @@
 import { parseSetCookie, parseDocumentCookieWrite, effectiveSameSite } from '../collect/cookie-parser.js';
 import { inspectCookieForConditionalFlags, scanSourceForConditionalFlags } from '../collect/conditional-flags.js';
 import { finding, REF } from './finding.js';
-import { parseOrigin, isLoopbackHost } from '../collect/origins.js';
+import { parseOrigin, isLoopbackHost, sharesDefaultCookieJar } from '../collect/origins.js';
 import { describeSystemPort } from '../collect/port-scan.js';
 
 /** Names that mean "losing this cookie logs the user out or breaks CSRF". */
@@ -27,12 +27,13 @@ function looksLikeAuthCookie(cookie) {
  * @param {import('../session.js').Capture} ctx.capture
  * @param {ReturnType<import('../collect/origins.js').createDeploymentModel>} ctx.model
  * @param {number[]} ctx.openPorts
+ * @param {boolean} [ctx.portScanSkipped] true when no scan ran, so "none" cannot be claimed
  * @param {string} ctx.targetUrl
  * @param {string} [ctx.platform] Overridable so port labelling is testable.
  * @returns {import('./finding.js').Finding[]}
  */
 export function cookieRules(ctx) {
-  const { capture, model, openPorts, targetUrl, platform = process.platform } = ctx;
+  const { capture, model, openPorts, portScanSkipped = false, targetUrl, platform = process.platform } = ctx;
   const target = parseOrigin(targetUrl);
   const out = [];
 
@@ -303,10 +304,7 @@ export function cookieRules(ctx) {
   // as `localhost` or `127.0.0.1`; a page on app.myproject.localhost shares
   // nothing with them, even though that name is also loopback. Checking only
   // "is this loopback" reported the hazard on subdomains where it cannot occur.
-  const sharesTheDefaultJar =
-    target?.isLoopback && (target.hostname === 'localhost' || /^(127\.|::1|0:0:)/.test(target.hostname));
-
-  if (sharesTheDefaultJar && hostOnly.length) {
+  if (sharesDefaultCookieJar(target?.hostname) && hostOnly.length) {
     const others = openPorts.filter((p) => String(p) !== target.port);
     // A system service on a well-known port is in the same jar, but it is not
     // another app of yours and nothing can be done about it. Counting it as one
@@ -348,7 +346,9 @@ export function cookieRules(ctx) {
                     return `127.0.0.1:${p}${system ? `  (${system})` : ''}`;
                   })
                   .join('\n')
-              : 'none found on the common dev ports',
+              : portScanSkipped
+                ? 'not probed, so this finding cannot say whether any exist'
+                : 'none found on the common dev ports',
           },
         ],
         fix: [

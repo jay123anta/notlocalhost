@@ -9,6 +9,36 @@ field is removed or retyped. Adding a field is not breaking.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-05
+
+### Fixed
+
+- `cookie.port-sharing-hazard` no longer fires when the page is served from a
+  subdomain of `.localhost`. Cookies are keyed by hostname, so a page on
+  `app.myproject.localhost` shares no jar with dev servers answering as
+  `localhost` or `127.0.0.1`, even though that name also resolves to
+  loopback. The rule tested "is this loopback", which is a different question,
+  and reported a hazard that cannot occur. A false positive in a tool people
+  run to be warned is worse than a missing rule: it teaches them to skim.
+- The loopback port scan is skipped when its result could not be used, instead
+  of running and being discarded. On a `.localhost` subdomain the analyzer no
+  longer lists neighbouring dev servers that share nothing with the page, and
+  `coverage.portScanSkipped` reports `true` for the scan it genuinely skipped.
+- An open port is no longer counted as a web server. A database or a message
+  broker answers a TCP connect but can never receive a cookie, so listing it
+  among the servers sharing your session inflated the count with ports nobody
+  could act on. Ports are now checked for an HTTP response, and the ones that
+  do not answer are reported separately in `coverage.nonHttpListeners`.
+- With `--no-port-scan`, the port-sharing finding said "none found on the
+  common dev ports" when no scan had run. It now says it did not look. "None
+  found" is a claim about having looked, and this is a tool for catching
+  exactly that.
+
+### Added
+
+- `coverage.nonHttpListeners`: loopback ports that were open but did not
+  answer as HTTP. Adding a field does not change `schemaVersion`.
+
 ## [0.1.0] - 2026-09-04
 
 First release.
@@ -46,5 +76,6 @@ First release.
 - Installs no certificate, changes no DNS, binds no privileged port, and writes
   nothing outside the working directory.
 
-[Unreleased]: https://github.com/jay123anta/notlocalhost/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/jay123anta/notlocalhost/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/jay123anta/notlocalhost/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/jay123anta/notlocalhost/releases/tag/v0.1.0

@@ -79,11 +79,41 @@ jobs:
       - name: Lint and invariants
         run: npm run lint
 
+      # First, because if the published interface moved then nothing else in this
+      # run matters. These assert on parsing and exit codes, not on findings.
+      - name: Published contract
+        run: npm run test:compat
+
+      # A suite that skips itself reports success having proven nothing.
+      - name: Assert the contract suite actually ran
+        shell: bash
+        run: |
+          out=$(npm run --silent test:compat)
+          ran=$(printf '%s' "$out" | grep -E '^# tests ' | grep -oE '[0-9]+' | head -1)
+          echo "contract assertions: ${ran:-0}"
+          if [ "${ran:-0}" -lt 20 ]; then
+            echo "::error::the contract suite ran ${ran:-0} tests; it is not verifying the shipped surface"
+            exit 1
+          fi
+
       - name: Unit tests
         run: npm run test:unit
 
       - name: End-to-end tests
         run: npm run test:e2e
+
+      # node --test can print "not ok" for a cancelled suite and still exit 0,
+      # so the per-suite steps above are not sufficient on their own. This one
+      # reads the TAP output and refuses a run that proved less than it claims.
+      #
+      # The analyzer suites only: this job has no Caddy, so the harness suites
+      # would skip themselves and trip the floor. They are run under the same
+      # checker in the harness job, where Caddy exists.
+      - name: Analyzer suites, judged by output rather than exit code
+        run: >-
+          node scripts/check-test-output.mjs
+          test/compat.test.js test/unit.test.js test/e2e.test.js test/report.test.js
+          --min 120
 
       # The e2e suite skips itself when no browser is present, which would let a
       # broken browser lookup pass CI silently. Fail loudly instead.
@@ -284,6 +314,9 @@ jobs:
             const r = await resolveCaddy({ log: (m) => console.log(m) });
             console.log(`${r.path}  (${r.source})`);
           '
+
+      - name: All suites, judged by output rather than exit code
+        run: node scripts/check-test-output.mjs --min 200
 
       - name: Every harness suite, asserting each one actually ran
         shell: bash

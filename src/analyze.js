@@ -5,8 +5,8 @@
 import { chromium } from 'playwright-core';
 import { locateBrowser } from './browser/locate.js';
 import { runSession } from './session.js';
-import { scanLoopbackPorts } from './collect/port-scan.js';
-import { createDeploymentModel, parseOrigin } from './collect/origins.js';
+import { scanLoopbackPorts, speaksHttp } from './collect/port-scan.js';
+import { createDeploymentModel, parseOrigin, sharesDefaultCookieJar } from './collect/origins.js';
 import { runRules } from './rules/index.js';
 import { severityRank, atOrAbove } from './rules/finding.js';
 import { VERSION, SCHEMA_VERSION } from './version.js';
@@ -74,11 +74,23 @@ export async function analyze(options) {
 
   // Probe for neighbours before we navigate, so the port list reflects the
   // machine as the developer left it rather than as our own browser left it.
-  const openPorts =
-    noPortScan || !target.isLoopback
-      ? []
-      : await scanLoopbackPorts({ exclude: Number(target.port) }).catch(() => []);
-  if (openPorts.length) log(`other loopback listeners: ${openPorts.join(', ')}`);
+  //
+  // Only worth doing when the target is in the jar those neighbours share. On
+  // app.myproject.localhost the scan would find the same ports and mean nothing
+  // by them, so it is skipped rather than reported as an empty result.
+  const scanUseful = !noPortScan && sharesDefaultCookieJar(target.hostname);
+  const listening = scanUseful ? await scanLoopbackPorts({ exclude: Number(target.port) }).catch(() => []) : [];
+
+  // An open port is not a web server. A database, a message broker and a
+  // language server all answer a TCP connect, and none of them will ever
+  // receive a cookie -- only something speaking HTTP can. Counting them as
+  // servers that share your session inflates the finding with ports nobody
+  // can act on. One minimal request settles it.
+  const httpCheck = await Promise.all(listening.map(async (p) => [p, await speaksHttp(p)]));
+  const openPorts = httpCheck.filter(([, yes]) => yes).map(([p]) => p);
+  const notHttp = httpCheck.filter(([, yes]) => !yes).map(([p]) => p);
+  if (openPorts.length) log(`other web servers on this host: ${openPorts.join(', ')}`);
+  if (notHttp.length) log(`ignored ${notHttp.join(', ')}: open, but not speaking HTTP`);
 
   const capture = await runSession({
     chromium,
@@ -93,7 +105,7 @@ export async function analyze(options) {
   });
 
   const model = createDeploymentModel({ domain, crossSite, explicit: map, paths: mapPaths });
-  const ctx = { capture, model, openPorts, targetUrl: url, platform: process.platform };
+  const ctx = { capture, model, openPorts, portScanSkipped: !scanUseful, targetUrl: url, platform: process.platform };
   const { findings, moduleErrors } = runRules(ctx);
 
   const counts = {
@@ -138,7 +150,8 @@ export async function analyze(options) {
       cookiesObserved: capture.setCookies.length,
       instrumentationEvents: capture.instrumentation.length,
       otherLoopbackListeners: openPorts,
-      portScanSkipped: noPortScan || !target.isLoopback,
+      nonHttpListeners: notHttp,
+      portScanSkipped: !scanUseful,
       timing: capture.timing,
     },
     counts,

@@ -5,5 +5,6 @@ notlocalhost-report.json
 .DS_Store
 *.log
 
-# Stage 2 harness workspace: downloaded Caddy, generated config, local CA.
+# Harness workspace: downloaded Caddy, generated config, the local CA record.
+# Generated output with absolute paths for one machine, not source.
 .notlocalhost/

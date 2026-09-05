@@ -49,9 +49,14 @@ translated into a fix. When this fires alongside a rule above, the two agree —
 one derived, one observed.
 
 ### `cookie.port-sharing-hazard` — will-break when other listeners are found, else info
-Host-only cookies on loopback are shared by every port on the machine. Cookies
-have no port concept; the `Set-Cookie` grammar has no port attribute. Names the
-other dev servers that are currently inside the same jar.
+Host-only cookies are shared by every port answering to the same hostname.
+Cookies have no port concept; the `Set-Cookie` grammar has no port attribute.
+Names the other dev servers that are currently inside the same jar.
+
+Fires only on `localhost`, `127.x.x.x` and `::1`, which is the jar those
+neighbours share. A page on `app.myproject.localhost` is loopback too, but the
+jar is keyed by name, so it shares nothing with them and the port scan is
+skipped rather than reported as empty.
 **Cite:** RFC 6265 §8.5. **Verified:** [claims 1–2](../evidence/README.md#the-port-sharing-reproduction).
 
 ### `cookie.host-only-stops-crossing` — will-break when credentialed, else may-break
