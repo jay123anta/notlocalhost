@@ -15,9 +15,16 @@ import { createServer } from 'node:http';
 import { chromium } from 'playwright-core';
 import { locateBrowser } from '../src/browser/locate.js';
 
-const PORT_A = 37301;
-const PORT_B = 37302;
-const PORT_C = 37303;
+// Ports the operating system hands out, filled in once the servers are bound.
+//
+// These were three fixed numbers, and nothing about the claims below depends
+// on which numbers they are -- only that they differ. A fixed port is a bet
+// that nothing else on the machine wants it, which on a CI runner is a bet
+// against a machine you have never seen: this script died in about a second,
+// intermittently, on one runner out of ten.
+let PORT_A;
+let PORT_B;
+let PORT_C;
 
 const seen = { a: [], b: [], c: [] };
 
@@ -71,7 +78,22 @@ const c = server('c', (req, res) => {
   res.end(`<h1>C on ${req.headers.host}</h1><pre>${req.headers.cookie ?? '(no cookies)'}</pre>`);
 });
 
-const listen = (srv, port) => new Promise((r) => srv.listen(port, '127.0.0.1', r));
+/**
+ * Bind on an OS-assigned port and report which one was given.
+ *
+ * The error path matters as much as the port. This used to resolve only, so a
+ * bind failure surfaced as an unhandled 'error' event that killed the process
+ * with no explanation -- which is how a port clash came to look like the
+ * reproduction itself failing.
+ */
+const listen = (srv) =>
+  new Promise((resolve, reject) => {
+    srv.once('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      srv.removeListener('error', reject);
+      resolve(srv.address().port);
+    });
+  });
 
 function heading(text) {
   console.log(`\n${text}\n${'='.repeat(text.length)}`);
@@ -85,7 +107,7 @@ function verdict(claim, holds, detail) {
 
 const results = [];
 
-await Promise.all([listen(a, PORT_A), listen(b, PORT_B), listen(c, PORT_C)]);
+[PORT_A, PORT_B, PORT_C] = await Promise.all([listen(a), listen(b), listen(c)]);
 
 const browserInfo = locateBrowser();
 const browser = await chromium.launch({ executablePath: browserInfo.path, headless: true });
