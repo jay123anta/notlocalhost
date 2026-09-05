@@ -79,6 +79,23 @@ jobs:
       - name: Lint and invariants
         run: npm run lint
 
+      # First, because if the published interface moved then nothing else in this
+      # run matters. These assert on parsing and exit codes, not on findings.
+      - name: Published contract
+        run: npm run test:compat
+
+      # A suite that skips itself reports success having proven nothing.
+      - name: Assert the contract suite actually ran
+        shell: bash
+        run: |
+          out=$(npm run --silent test:compat)
+          ran=$(printf '%s' "$out" | grep -E '^# tests ' | grep -oE '[0-9]+' | head -1)
+          echo "contract assertions: ${ran:-0}"
+          if [ "${ran:-0}" -lt 20 ]; then
+            echo "::error::the contract suite ran ${ran:-0} tests; it is not verifying the shipped surface"
+            exit 1
+          fi
+
       - name: Unit tests
         run: npm run test:unit
 

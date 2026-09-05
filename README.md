@@ -22,7 +22,7 @@ It installs nothing, trusts no certificate, touches no DNS, binds no port, and
 writes nothing outside the directory you run it in.
 
 ```
-notlocalhost 0.1.0  •  http://localhost:5173
+notlocalhost 0.1.1  •  http://localhost:5173
 ──────────────────────────────────────────────────────────────────────────────
 target      http://localhost:5173/  (HTTP 200)
 browser     Google Chrome 152.0.7977.65
