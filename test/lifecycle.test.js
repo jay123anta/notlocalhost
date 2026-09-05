@@ -397,3 +397,72 @@ function fetchInsecure(url) {
     }, reject);
   });
 }
+
+describe('an interrupted trust install is still recorded', { skip }, () => {
+  // The most dangerous thing the harness does is the one thing no test could
+  // previously touch: every case above passes trust: false, so the certificate
+  // path had no coverage at all. That is how a broken verification shipped and
+  // left five roots on a machine.
+  //
+  // No real trust store is touched here. `up` takes the install step as a
+  // parameter, so a failure part-way through can be simulated exactly.
+  let scratch;
+  let upstreamSrv;
+  let port;
+  let caPath;
+
+  before(async () => {
+    scratch = mkdtempSync(join(tmpdir(), 'nlh-trust-'));
+    upstreamSrv = createServer((_, res) => res.end('ok'));
+    await new Promise((r) => upstreamSrv.listen(0, '127.0.0.1', r));
+    port = upstreamSrv.address().port;
+
+    // A real certificate, in a scratch data directory Caddy would use.
+    caPath = join(scratch, 'data', 'caddy', 'pki', 'authorities', 'local', 'root.crt');
+    mkdirSync(join(scratch, 'data', 'caddy', 'pki', 'authorities', 'local'), { recursive: true });
+    writeFileSync(caPath, readFileSync(join(process.cwd(), 'test', 'fixtures', 'ca-root.pem')));
+  });
+
+  after(async () => {
+    try {
+      await down({ cwd: scratch, env: { ...process.env, XDG_DATA_HOME: join(scratch, 'data') } });
+    } catch {
+      /* the point of the test is what the ledger holds, not that down succeeds */
+    }
+    await new Promise((r) => upstreamSrv.close(r));
+    rmSync(scratch, { recursive: true, force: true });
+  });
+
+  test('the ledger names the certificate before the install is attempted', async () => {
+    await init({ cwd: scratch, project: 'trusttest', upstreams: [{ label: 'app', port }], force: true });
+
+    const env = { ...process.env, XDG_DATA_HOME: join(scratch, 'data') };
+    let ledgerDuringInstall = null;
+
+    await up({
+      cwd: scratch,
+      consent: true,
+      httpPort: await freePort(),
+      httpsPort: await freePort(),
+      env,
+      trust: true,
+      // Stands in for the moment after the root is in the store and before
+      // anything has recorded it. Whatever the ledger holds here is all `down`
+      // would ever have to work from.
+      installTrust: async () => {
+        ledgerDuringInstall = readState(scratch);
+        const err = new Error('interrupted');
+        err.code = 'TRUST_FAILED';
+        throw err;
+      },
+    }).catch(() => {});
+
+    assert.ok(ledgerDuringInstall, 'state must exist before the install runs');
+    assert.equal(ledgerDuringInstall.caTrusted, 'attempting', 'the attempt must be on record, not just its success');
+    assert.match(
+      String(ledgerDuringInstall.ca?.sha1 ?? ''),
+      /^[0-9a-f]{40}$/,
+      'and it must name the exact certificate, or down has nothing to remove',
+    );
+  });
+});

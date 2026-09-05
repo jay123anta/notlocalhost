@@ -132,6 +132,10 @@ export async function up(opts = {}) {
     env = process.env,
     trust = true,
     log = () => {},
+    // Injectable so the crash-safety of the trust sequence can be tested
+    // without a test ever touching a real trust store. There is no other way
+    // to assert what the ledger holds at the moment an install is interrupted.
+    installTrust = trustCa,
   } = opts;
 
   const config = readConfig(cwd);
@@ -210,9 +214,23 @@ export async function up(opts = {}) {
     if (!appeared) {
       log(`no certificate authority appeared at ${certPath}; skipping trust`);
     } else {
-      const cert = await trustCa({ env, log, certPath });
-      state.caTrusted = true;
+      // Record the intent before acting, not the outcome afterwards.
+      //
+      // Installing first and writing the ledger second leaves a window --
+      // Ctrl-C, a crash, a closed laptop -- where the root is in the store and
+      // nothing knows it, so `down` will never remove it. That is exactly how
+      // orphaned authorities accumulate, and the guard inside trustCa only
+      // covers the case where the install itself reports failure.
+      //
+      // Written first, the worst case is `down` trying to remove something
+      // that was never installed, which is harmless and says so.
+      state.ca = describeCertificate(certPath);
+      state.caTrusted = 'attempting';
+      writeState(state, cwd);
+
+      const cert = await installTrust({ env, log, certPath });
       state.ca = cert;
+      state.caTrusted = true;
       writeState(state, cwd);
     }
   }

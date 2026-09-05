@@ -291,10 +291,28 @@ function extract(archivePath, dir, format) {
   } catch (err) {
     if (platform() !== 'win32' || format !== 'zip') throw err;
   }
+  // Paths travel in the environment, never interpolated into the command.
+  //
+  // They were spliced into a single-quoted PowerShell string, and a path
+  // containing an apostrophe closes that quote early: C:\Users\O'Brien is
+  // enough to turn the rest of the path into code. Common surname, and the
+  // general case is command injection through a directory name.
+  //
+  // stderr is kept rather than discarded, so a failure says what went wrong.
   execFileSync(
     'powershell',
-    ['-NoProfile', '-NonInteractive', '-Command', `Expand-Archive -LiteralPath '${archivePath}' -DestinationPath '${dir}' -Force`],
-    { stdio: 'ignore', timeout: 120_000, windowsHide: true },
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      '$ErrorActionPreference = "Stop"; Expand-Archive -LiteralPath $env:NLH_ARCHIVE -DestinationPath $env:NLH_DEST -Force',
+    ],
+    {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      timeout: 120_000,
+      windowsHide: true,
+      env: { ...process.env, NLH_ARCHIVE: archivePath, NLH_DEST: dir },
+    },
   );
 }
 

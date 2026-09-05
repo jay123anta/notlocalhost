@@ -19,7 +19,7 @@
  * against a temporary file. Nothing here reads the real hosts file unless it
  * is told to.
  */
-import { readFileSync, writeFileSync, copyFileSync, existsSync, rmSync } from 'node:fs';
+import { readFileSync, writeFileSync, copyFileSync, existsSync, rmSync, renameSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 
 export const BEGIN = (project) => `# >>> notlocalhost: ${project} >>>`;
@@ -120,6 +120,26 @@ export function withoutBlock(text, project) {
  * @returns {{ changed: boolean, before: string, after: string, backup: string|null }}
  *   `before` and `after` are digests.
  */
+/**
+ * Replace a file's contents in one step.
+ *
+ * A plain write truncates first, so an interruption part-way leaves a
+ * half-written file. For the hosts file that means a machine that cannot
+ * resolve localhost, recoverable only by finding the backup by hand. Writing
+ * beside it and renaming means the file is either wholly old or wholly new:
+ * rename is atomic within a filesystem on every platform this runs on.
+ */
+function writeAtomically(path, contents) {
+  const temp = `${path}.notlocalhost-tmp`;
+  try {
+    writeFileSync(temp, contents, 'utf8');
+    renameSync(temp, path);
+  } catch (err) {
+    rmSync(temp, { force: true });
+    throw err;
+  }
+}
+
 export function applyBlock(path, project, hostnames, opts = {}) {
   const { ip = '127.0.0.1', backupPath = `${path}.notlocalhost-backup` } = opts;
   const original = readFileSync(path, 'utf8');
@@ -131,7 +151,7 @@ export function applyBlock(path, project, hostnames, opts = {}) {
   // Copy first. A failure between here and the write leaves something to
   // recover from, which matters when the file is the machine's name resolution.
   copyFileSync(path, backupPath);
-  writeFileSync(path, updated, 'utf8');
+  writeAtomically(path, updated);
 
   return { changed: true, before, after: digestOf(updated), backup: backupPath };
 }
@@ -167,7 +187,7 @@ export function removeBlock(path, project, expectedDigest, opts = {}) {
   }
 
   const updated = withoutBlock(current, project);
-  writeFileSync(path, updated, 'utf8');
+  writeAtomically(path, updated);
   const digest = digestOf(updated);
   const matches = expectedDigest ? digest === expectedDigest : true;
 

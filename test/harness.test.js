@@ -44,7 +44,7 @@ import {
 import { renderCaddyfile, summariseSites, isUnmodified } from '../src/harness/caddyfile.js';
 import { assetFor, parseChecksums, digest, getJson } from '../src/harness/caddy.js';
 import { checkDns, checkCertTrust, checkPorts, checkProxy, runAllChecks, hostsPath } from '../src/harness/checks.js';
-import { caRootPath, describeCertificate, trustState, removeCommandFor } from '../src/harness/trust.js';
+import { caRootPath, describeCertificate, trustState, removeCommandFor, digestsIn } from '../src/harness/trust.js';
 
 let tmp;
 before(() => {
@@ -682,5 +682,51 @@ describe('the release lookup fails in the ways this call actually fails', () => 
       /ENOTFOUND/,
     );
     assert.equal(calls, 3);
+  });
+});
+
+describe('review findings: the certificate path says what it means', () => {
+  const FIXTURE_CERT = describeCertificate(join(process.cwd(), 'test', 'fixtures', 'ca-root.pem'));
+
+  // Finding 1. macOS deleted by common name, which every Caddy authority on
+  // the machine shares -- including ones this project never installed.
+  test('the removal command identifies one certificate, never a shared subject', () => {
+    const cmd = removeCommandFor({ sha1: 'abc123', fingerprint: 'deadbeef' });
+    assert.ok(!/-c\s+["']?Caddy Local Authority/.test(cmd), `deletes by subject: ${cmd}`);
+    if (process.platform === 'darwin') {
+      assert.match(cmd, /-Z\s+ABC123/, 'macOS addresses certificates by SHA-1 hash');
+    }
+  });
+
+  // Finding 3. The advice shown when automated removal failed used a truncated
+  // SHA-256 against a tool that matches SHA-1, so it could never work.
+  test('the by-hand command never offers a truncated digest', () => {
+    const cmd = removeCommandFor(FIXTURE_CERT ?? { sha1: 'a'.repeat(40), fingerprint: 'b'.repeat(64) });
+    const digests = cmd.match(/[0-9a-fA-F]{8,}/g) ?? [];
+    for (const d of digests) {
+      assert.ok(d.length === 40 || d.length === 64, `truncated digest in: ${cmd}`);
+    }
+  });
+
+  // Finding 7. Matching against the whole dump as one string can match across
+  // the boundary between two fields once whitespace is stripped.
+  test('a digest is matched as a value, not as a substring of the dump', () => {
+    // certutil wraps long values onto continuation lines, so two runs of hex
+    // end up adjacent with nothing between them once whitespace is stripped.
+    // normalise(out).includes(needle) then reports a certificate as present
+    // that is not there, and `down` says it failed to remove something it had
+    // already removed.
+    const target = 'a'.repeat(40);
+    const dump = [
+      'Serial Number: ' + 'a'.repeat(25),
+      '  ' + 'a'.repeat(15),
+      'Cert Hash(sha1): ' + 'b'.repeat(40),
+    ].join(String.fromCharCode(10));
+
+    const oldWay = (out, needle) => String(out).replace(/[\s:]/g, '').toLowerCase().includes(needle);
+    assert.equal(oldWay(dump, target), true, 'the old match really did report this as present');
+
+    assert.equal(digestsIn(dump).has(target), false, 'a value split across lines is not a digest');
+    assert.equal(digestsIn(dump).has('b'.repeat(40)), true, 'and a real one is still found');
   });
 });

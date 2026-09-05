@@ -84,11 +84,28 @@ export function describeCertificate(path) {
  * not look is exactly the lie that would make `down` untrustworthy.
  *
  * @param {string} fingerprint  SHA-256, lowercase hex, no separators.
- * @returns {'present'|'absent'|'unknown'}
+/**
+ * Every certificate digest a tool printed, one per line, normalised.
+ *
+ * Matching a digest against the whole dump as one string can match across the
+ * boundary between two fields once whitespace is stripped, which would report a
+ * certificate as present that is not there -- and `down` would then say it
+ * failed to remove something it had already removed. Reading digests as values
+ * rather than as substrings removes the question.
  */
+export function digestsIn(text) {
+  const found = new Set();
+  for (const line of String(text).split('\n')) {
+    const compact = line.replace(/[\s:]/g, '').toLowerCase();
+    for (const [hex] of compact.matchAll(/[0-9a-f]{40,64}/g)) {
+      if (hex.length === 40 || hex.length === 64) found.add(hex);
+    }
+  }
+  return found;
+}
+
 export function trustState(fingerprint, sha1 = null) {
   if (!fingerprint) return 'unknown';
-  const normalise = (s) => String(s).replace(/[\s:]/g, '').toLowerCase();
 
   try {
     if (OS === 'win32') {
@@ -104,7 +121,7 @@ export function trustState(fingerprint, sha1 = null) {
       // matched here. Falling back to the SHA-256 value would silently never
       // match, which is worse than not looking at all.
       const needle = sha1 ?? fingerprint;
-      return normalise(out).includes(needle) ? 'present' : 'absent';
+      return digestsIn(out).has(needle) ? 'present' : 'absent';
     }
 
     if (OS === 'darwin') {
@@ -113,20 +130,32 @@ export function trustState(fingerprint, sha1 = null) {
         ['find-certificate', '-a', '-Z', '/Library/Keychains/System.keychain'],
         { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 20_000 },
       );
-      return normalise(out).includes(fingerprint) ? 'present' : 'absent';
+      const seen = digestsIn(out);
+      return seen.has(fingerprint) || (sha1 && seen.has(sha1)) ? 'present' : 'absent';
     }
 
     // Linux: Chrome reads its own NSS database, which needs no root.
     const nssdb = join(homedir(), '.pki', 'nssdb');
     if (!existsSync(nssdb)) return 'absent';
-    const out = execFileSync('certutil', ['-L', '-d', `sql:${nssdb}`], {
+
+    const list = execFileSync('certutil', ['-L', '-d', `sql:${nssdb}`], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 20_000,
     });
-    // NSS lists nicknames rather than fingerprints, so match the one we install
-    // under. The constant is shared with the installer so they cannot drift.
-    return out.includes(NSS_NICKNAME) ? 'present' : 'absent';
+    if (!list.includes(NSS_NICKNAME)) return 'absent';
+
+    // The nickname says something is installed under our name; it does not say
+    // it is our certificate. Read it back and compare the fingerprint, or a
+    // stale root from an earlier run would report a certificate as trusted that
+    // was never added -- and TLS would then fail with nothing to explain it.
+    const pem = execFileSync('certutil', ['-L', '-d', `sql:${nssdb}`, '-n', NSS_NICKNAME, '-a'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 20_000,
+    });
+    const actual = new X509Certificate(pem).fingerprint256.replace(/:/g, '').toLowerCase();
+    return actual === fingerprint ? 'present' : 'absent';
   } catch {
     return 'unknown';
   }
@@ -264,11 +293,11 @@ export async function untrustCa({ fingerprint, certificate, env = process.env, l
       state === 'present'
         ? [
             'The certificate is still in the trust store.',
-            OS === 'win32'
-              ? `Remove it by hand:  certutil -user -delstore Root ${fingerprint?.slice(0, 16) ?? '<thumbprint>'}`
-              : OS === 'darwin'
-                ? 'Remove it by hand: open Keychain Access, search for "Caddy Local Authority", and delete it.'
-                : 'Remove it by hand:  certutil -D -d sql:$HOME/.pki/nssdb -n "Caddy Local Authority"',
+            // One source for this command. The copy that used to live here passed a
+            // truncated SHA-256 to a tool that matches SHA-1, so the instruction
+            // shown at the exact moment automated removal had failed was one that
+            // could never work.
+            `Remove it by hand:  ${removeCommandFor(certificate)}`,
           ]
         : state === 'unknown'
           ? ['The trust store could not be queried, so removal could not be confirmed. Check it by hand before assuming it is gone.']
@@ -292,7 +321,13 @@ async function removeRoot(cert) {
     return run('certutil', ['-user', '-delstore', 'Root', id], { timeout: 120_000, windowsHide: true });
   }
   if (OS === 'darwin') {
-    return run('sudo', ['security', 'delete-certificate', '-c', 'Caddy Local Authority', '-t'], { timeout: 120_000 });
+    // By SHA-1 hash, not by common name. "Caddy Local Authority" is the subject
+    // of every Caddy authority on the machine, including ones this project
+    // never installed and any belonging to another project, so -c would delete
+    // somebody else's root and report success.
+    const sha1 = typeof cert === 'string' ? null : cert?.sha1;
+    if (!sha1) throw new Error('no SHA-1 recorded, so the exact certificate cannot be identified');
+    return run('sudo', ['security', 'delete-certificate', '-Z', sha1.toUpperCase(), '-t'], { timeout: 120_000 });
   }
   const nssdb = join(homedir(), '.pki', 'nssdb');
   return run('certutil', ['-d', `sql:${nssdb}`, '-D', '-n', NSS_NICKNAME], { timeout: 120_000 });
