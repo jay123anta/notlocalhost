@@ -72,6 +72,15 @@ between subdomains?** If not, take the default and never type a password.
 | A proxy on ports 80 and 443 -- or whichever ports you give `up` -- while it is running | `down` stops it. Nothing is installed as a service |
 | A `.notlocalhost/` directory in your project | `down --purge` deletes it |
 
+**Only one thing can put a certificate in your trust store, and it asks first.**
+Caddy's internal issuer installs its own root automatically the first time it
+serves TLS, which would mean a certificate authority arriving on the machine
+without anyone agreeing to it and without this tool recording it -- so `down`
+would neither know to remove it nor be able to. The generated Caddyfile sets
+`skip_install_trust` to prevent that. Trust is installed by one code path, only
+when you asked for it, and only after the certificate has been written to the
+record `down` reads.
+
 Three things are worth knowing about how that reversal is built.
 
 **The record of what happened is kept separately from what you asked for.**

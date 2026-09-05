@@ -410,6 +410,38 @@ serves over HTTP, exactly as a browser does, and writes the report you asked for
 That constraint is the product, not a limitation. A diagnosis you can run
 without thinking about it is one you will actually run.
 
+### The harness is separate, and opt-in
+
+`notlocalhost <url>` predicts. There is a second, optional part that serves your
+app over real local HTTPS so the predictions become observations:
+
+```
+notlocalhost init      # look at the project, print what would change, change nothing
+notlocalhost up        # serve it over HTTPS on a real hostname
+notlocalhost down      # put the machine back
+notlocalhost doctor    # say what is true about this machine, change nothing
+```
+
+It is separate on purpose. The analyzer is safe to run without thinking, and
+that is exactly why it must not be the thing that installs a certificate
+authority. The harness is the part that asks for something, so it asks first:
+`up` prints every change and stops unless you pass `--yes`.
+
+The default tier uses hostnames under `.localhost`, which need **no
+administrator rights at all** -- no hosts file, no DNS, and on Windows a
+per-user trust store that needs no elevation.
+
+Everything it changes is recorded, and `down` verifies each reversal rather than
+assuming it: the hosts file is checked against its digest from before the
+change, and the certificate is confirmed gone from the store by fingerprint.
+Where it cannot undo something, it says which step and prints the exact command
+to finish by hand.
+
+[**Full documentation, including what happens on a locked-down machine.**](docs/harness.md)
+
+Not shipped yet. It lives on a branch until its gate passes on Windows, macOS
+and Linux together, and `0.1.1` on npm contains none of it.
+
 ---
 
 ## Licence
