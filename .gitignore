@@ -4,3 +4,4 @@ notlocalhost-report.html
 notlocalhost-report.json
 .DS_Store
 *.log
+.notlocalhost/

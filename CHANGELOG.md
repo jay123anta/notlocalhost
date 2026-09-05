@@ -9,6 +9,18 @@ field is removed or retyped. Adding a field is not breaking.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-05
+
+### Fixed
+
+- `cookie.port-sharing-hazard` no longer fires when the page is served from a
+  subdomain of `.localhost`. Cookies are keyed by hostname, so a page on
+  `app.myproject.localhost` shares no jar with dev servers answering as
+  `localhost` or `127.0.0.1`, even though that name also resolves to
+  loopback. The rule tested "is this loopback", which is a different question,
+  and reported a hazard that cannot occur. A false positive in a tool people
+  run to be warned is worse than a missing rule: it teaches them to skim.
+
 ## [0.1.0] - 2026-09-04
 
 First release.
@@ -46,5 +58,6 @@ First release.
 - Installs no certificate, changes no DNS, binds no privileged port, and writes
   nothing outside the working directory.
 
-[Unreleased]: https://github.com/jay123anta/notlocalhost/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/jay123anta/notlocalhost/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/jay123anta/notlocalhost/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/jay123anta/notlocalhost/releases/tag/v0.1.0

@@ -298,7 +298,15 @@ export function cookieRules(ctx) {
 
   // ------------------------------------------------- the port-sharing hazard --
   const hostOnly = uniq.filter((c) => !c.domain);
-  if (target?.isLoopback && hostOnly.length) {
+  // Cookies are keyed by hostname, so the shared jar only exists between things
+  // reachable under the *same* name. Other dev servers on this machine answer
+  // as `localhost` or `127.0.0.1`; a page on app.myproject.localhost shares
+  // nothing with them, even though that name is also loopback. Checking only
+  // "is this loopback" reported the hazard on subdomains where it cannot occur.
+  const sharesTheDefaultJar =
+    target?.isLoopback && (target.hostname === 'localhost' || /^(127\.|::1|0:0:)/.test(target.hostname));
+
+  if (sharesTheDefaultJar && hostOnly.length) {
     const others = openPorts.filter((p) => String(p) !== target.port);
     // A system service on a well-known port is in the same jar, but it is not
     // another app of yours and nothing can be done about it. Counting it as one

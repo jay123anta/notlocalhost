@@ -385,6 +385,34 @@ describe('system-owned ports are labelled, not counted as dev servers', () => {
     assert.equal(describeSystemPort(8080, 'darwin'), null);
   });
 
+  test('the shared jar is keyed by hostname, not by "is it loopback"', () => {
+    // Found by serving the fixture through the harness on app.demo.localhost:
+    // that name is loopback, so the hazard fired -- but other dev servers
+    // answer as localhost/127.0.0.1, which is a different host, so nothing is
+    // shared with them. Cookies are keyed by name, not by interface.
+    const capture = {
+      setCookies: [{ raw: 'sid=abc; Path=/; HttpOnly', url: 'https://app.demo.localhost/', phase: 'response' }],
+      instrumentation: [],
+      blockedCookies: [],
+      requests: [],
+      bodies: [],
+      finalUrl: 'https://app.demo.localhost/',
+    };
+    const model = createDeploymentModel({ domain: 'example.com' });
+    const forHost = (url) =>
+      cookieRules({ capture, model, openPorts: [4000, 8080], targetUrl: url }).find(
+        (f) => f.id === 'cookie.port-sharing-hazard',
+      );
+
+    assert.ok(forHost('http://localhost:3000'), 'bare localhost does share one jar with other ports');
+    assert.ok(forHost('http://127.0.0.1:3000'), 'a loopback IP shares it too');
+    assert.equal(
+      forHost('https://app.demo.localhost'),
+      undefined,
+      'a .localhost subdomain has its own jar and must not report the hazard',
+    );
+  });
+
   test('a run whose only neighbours are system ports is info, not will-break', () => {
     // Otherwise every Mac gets a permanent will-break for AirPlay, and a
     // finding that is always present is one people learn to skip past.

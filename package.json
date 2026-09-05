@@ -1,6 +1,6 @@
 {
   "name": "notlocalhost",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Your localhost is lying to you. This tells you exactly how. Predicts what breaks when your dev server moves to a real HTTPS origin.",
   "keywords": [
     "localhost",
