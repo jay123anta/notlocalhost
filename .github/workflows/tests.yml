@@ -102,6 +102,12 @@ jobs:
       - name: End-to-end tests
         run: npm run test:e2e
 
+      # node --test can print "not ok" for a cancelled suite and still exit 0,
+      # so the per-suite steps above are not sufficient on their own. This one
+      # reads the TAP output and refuses a run that proved less than it claims.
+      - name: All suites, judged by output rather than exit code
+        run: npm test
+
       # The e2e suite skips itself when no browser is present, which would let a
       # broken browser lookup pass CI silently. Fail loudly instead.
       - name: Assert the e2e suite actually ran

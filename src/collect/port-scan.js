@@ -101,3 +101,44 @@ export async function scanLoopbackPorts(opts = {}) {
   const results = await Promise.all(list.map((p) => probe(p, host, timeoutMs).then((open) => [p, open])));
   return results.filter(([, open]) => open).map(([p]) => p).sort((a, b) => a - b);
 }
+
+/**
+ * Does something on this port actually speak HTTP?
+ *
+ * An open port is not a web server. A database, a message broker and a
+ * language server all answer a TCP connect, and proposing to put a TLS proxy
+ * in front of PostgreSQL is not a useful suggestion. One minimal request
+ * settles it: anything that replies with a status line is a web server, and
+ * anything that stays silent or answers in its own protocol is not.
+ *
+ * @param {number} port
+ * @param {string} [host]
+ * @param {number} [timeoutMs]
+ * @returns {Promise<boolean>}
+ */
+export function speaksHttp(port, host = '127.0.0.1', timeoutMs = 1200) {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    let received = '';
+    let settled = false;
+    const done = (yes) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(yes);
+    };
+
+    socket.setTimeout(timeoutMs);
+    socket.once('timeout', () => done(false));
+    socket.once('error', () => done(false));
+    socket.once('connect', () => {
+      socket.write(`GET / HTTP/1.1\r\nHost: ${host}\r\nConnection: close\r\nUser-Agent: notlocalhost\r\n\r\n`);
+    });
+    socket.on('data', (chunk) => {
+      received += chunk.toString('latin1');
+      if (received.length >= 12) done(/^HTTP\/\d/.test(received));
+    });
+    socket.once('close', () => done(/^HTTP\/\d/.test(received)));
+    socket.connect(port, host);
+  });
+}

@@ -27,12 +27,13 @@ function looksLikeAuthCookie(cookie) {
  * @param {import('../session.js').Capture} ctx.capture
  * @param {ReturnType<import('../collect/origins.js').createDeploymentModel>} ctx.model
  * @param {number[]} ctx.openPorts
+ * @param {boolean} [ctx.portScanSkipped] true when no scan ran, so "none" cannot be claimed
  * @param {string} ctx.targetUrl
  * @param {string} [ctx.platform] Overridable so port labelling is testable.
  * @returns {import('./finding.js').Finding[]}
  */
 export function cookieRules(ctx) {
-  const { capture, model, openPorts, targetUrl, platform = process.platform } = ctx;
+  const { capture, model, openPorts, portScanSkipped = false, targetUrl, platform = process.platform } = ctx;
   const target = parseOrigin(targetUrl);
   const out = [];
 
@@ -345,7 +346,9 @@ export function cookieRules(ctx) {
                     return `127.0.0.1:${p}${system ? `  (${system})` : ''}`;
                   })
                   .join('\n')
-              : 'none found on the common dev ports',
+              : portScanSkipped
+                ? 'not probed, so this finding cannot say whether any exist'
+                : 'none found on the common dev ports',
           },
         ],
         fix: [

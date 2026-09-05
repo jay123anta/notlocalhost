@@ -78,11 +78,16 @@ export function renderHtml(result) {
     <dt>Requests seen</dt><dd>${esc(result.coverage.requests)}</dd>
     <dt><code>Set-Cookie</code> seen</dt><dd>${esc(result.coverage.cookiesObserved)}</dd>
     <dt>Bytes scanned</dt><dd>${esc(fmtBytes(result.coverage.bytesScanned))} across ${esc(result.coverage.bodiesScanned)} responses</dd>
-    <dt>Other loopback listeners</dt><dd>${
+    <dt>Other web servers here</dt><dd>${
       result.coverage.portScanSkipped
         ? '<span class="muted">not probed</span>'
         : result.coverage.otherLoopbackListeners.length
-          ? result.coverage.otherLoopbackListeners.map((p) => `<code>127.0.0.1:${esc(p)}</code>`).join(' ')
+          ? result.coverage.otherLoopbackListeners.map((p) => `<code>127.0.0.1:${esc(p)}</code>`).join(' ') +
+            (result.coverage.nonHttpListeners?.length
+              ? ` <span class="muted">(${result.coverage.nonHttpListeners
+                  .map((p) => esc(p))
+                  .join(', ')} open but not speaking HTTP)</span>`
+              : '')
           : '<span class="muted">none found on the common dev ports</span>'
     }</dd>
   </dl>
