@@ -24,7 +24,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { init, up, down, isAlive, stopProcess } from '../src/harness/lifecycle.js';
-import { readConfig, readState, harnessDir } from '../src/harness/config.js';
+import { readConfig, readState, writeState, harnessDir } from '../src/harness/config.js';
 import { digestOfFile, findBlock } from '../src/harness/hosts.js';
 import { findInstalledCaddy, findLocalCaddy } from '../src/harness/caddy.js';
 
@@ -424,6 +424,21 @@ describe('an interrupted trust install is still recorded', { skip }, () => {
   });
 
   after(async () => {
+    // Clear the certificate entries before down runs.
+    //
+    // The ledger deliberately says an install was attempted, and down honours
+    // that by asking the platform to remove the certificate -- against the real
+    // trust store, on the real machine. Nothing would be deleted, since this
+    // fixture was never installed, but running certutil -delstore on a
+    // developer's machine is exactly what this suite promises never to do. The
+    // assertion above has already been made by this point.
+    const ledger = readState(scratch);
+    if (ledger) {
+      ledger.caTrusted = false;
+      ledger.ca = null;
+      writeState(ledger, scratch);
+    }
+
     try {
       await down({ cwd: scratch, env: { ...process.env, XDG_DATA_HOME: join(scratch, 'data') } });
     } catch {

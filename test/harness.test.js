@@ -730,3 +730,33 @@ describe('review findings: the certificate path says what it means', () => {
     assert.equal(digestsIn(dump).has('b'.repeat(40)), true, 'and a real one is still found');
   });
 });
+
+describe('the generated Caddyfile cannot install trust behind our back', () => {
+  // Found by counting the machine's trust store after a test run: 23 Caddy
+  // roots, one per `up`, every one of them from a test that passed
+  // trust: false. Caddy's internal issuer installs its root on first TLS use
+  // unless told not to, so consent was being bypassed by the tool we delegate
+  // to -- and `down` had no record to remove.
+  const cfg = defaultConfig({ cwd: '/p/demo', upstreams: [{ port: 3000 }] });
+
+  test('skip_install_trust is present, in the global options', () => {
+    const out = renderCaddyfile(cfg, {});
+    const globalBlock = out.slice(out.indexOf('{'), out.indexOf('}'));
+    assert.match(globalBlock, /skip_install_trust/, 'without this, every up installs a root nobody agreed to');
+  });
+
+  test('it is present for every tier and port combination', () => {
+    for (const tier of Object.keys(TIERS)) {
+      const c = defaultConfig({ cwd: '/p/demo', tier, upstreams: [{ port: 3000 }, { port: 4000 }] });
+      for (const ports of [{}, { httpPort: 8080, httpsPort: 8443 }]) {
+        assert.match(renderCaddyfile(c, ports), /skip_install_trust/, `missing for tier ${tier}`);
+      }
+    }
+  });
+
+  test('a Caddyfile without it is not treated as unmodified', () => {
+    const rendered = renderCaddyfile(cfg, {});
+    const tampered = rendered.replace(/\n\tskip_install_trust/, '');
+    assert.equal(isUnmodified(tampered, cfg, {}), false, 'removing it must count as a change, not pass silently');
+  });
+});

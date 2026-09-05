@@ -38,6 +38,16 @@ export function renderCaddyfile(cfg, opts = {}) {
   // Issue certificates from Caddy's own local CA rather than a public one.
   // Nothing contacts an ACME server; this works entirely offline.
   lines.push('\tlocal_certs');
+  // Caddy installs its own root into the platform trust store the first
+  // time its internal issuer serves TLS. That puts a certificate authority
+  // on the machine without anyone agreeing to it, and without this project
+  // recording it -- so `down` neither knows to remove it nor could. Every
+  // run left one behind, including every test that passed trust: false.
+  //
+  // Trust is installed by trustCa instead: only when the caller asked, and
+  // only after the certificate is in the ledger. This line makes that the
+  // only path by which a root reaches the store.
+  lines.push(String.fromCharCode(9) + "skip_install_trust");
   lines.push('}');
   lines.push('');
 
