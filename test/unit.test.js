@@ -378,10 +378,18 @@ describe('port scanning stays on loopback', () => {
   test('finds a port we opened and not one we did not', async () => {
     const { createServer } = await import('node:http');
     const srv = createServer((_, res) => res.end('ok'));
-    await new Promise((r) => srv.listen(39411, '127.0.0.1', r));
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    const open1 = srv.address().port;
+
+    // A port we opened and released, rather than open1 + 1, which might
+    // genuinely belong to something else and would fail for the wrong reason.
+    const closedProbe = createServer();
+    await new Promise((r) => closedProbe.listen(0, '127.0.0.1', r));
+    const closed = closedProbe.address().port;
+    await new Promise((r) => closedProbe.close(r));
     try {
-      const open = await scanLoopbackPorts({ ports: [39411, 39412], timeoutMs: 500 });
-      assert.deepEqual(open, [39411]);
+      const open = await scanLoopbackPorts({ ports: [open1, closed], timeoutMs: 500 });
+      assert.deepEqual(open, [open1]);
     } finally {
       srv.close();
     }

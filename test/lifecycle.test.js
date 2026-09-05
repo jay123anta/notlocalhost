@@ -28,9 +28,30 @@ import { readConfig, readState, harnessDir } from '../src/harness/config.js';
 import { digestOfFile, findBlock } from '../src/harness/hosts.js';
 import { findInstalledCaddy, findLocalCaddy } from '../src/harness/caddy.js';
 
-const HTTP_PORT = 39820;
-const HTTPS_PORT = 39821;
-const UPSTREAM = 39822;
+/**
+ * Ports the operating system hands out, not ports we hope are free.
+ *
+ * These were fixed numbers, which is a bet that nothing else on the machine
+ * wants them -- and on Windows it is a bet against the machine itself. Hyper-V,
+ * WSL and Docker reserve blocks of the dynamic port range at boot, the blocks
+ * differ per machine, and binding inside one fails with a permission error that
+ * looks nothing like a port clash. A test that passes depending on which
+ * features a host has installed is not testing what it claims to.
+ *
+ * Assigned in before(), so every reference below reads them after they are set.
+ */
+let HTTP_PORT;
+let HTTPS_PORT;
+let UPSTREAM;
+
+/** Ask the OS for a port it considers free, then release it. */
+async function freePort() {
+  const probe = createServer();
+  await new Promise((r) => probe.listen(0, '127.0.0.1', r));
+  const { port } = probe.address();
+  await new Promise((r) => probe.close(r));
+  return port;
+}
 
 // The harness needs Caddy. Downloading one inside a test would make the suite
 // depend on the network, so this runs only where a Caddy already exists.
@@ -64,6 +85,8 @@ before(async () => {
     chmodSync(join(dest, binName), 0o755);
   }
 
+  [HTTP_PORT, HTTPS_PORT] = [await freePort(), await freePort()];
+
   upstream = createServer((req, res) => {
     res.writeHead(200, {
       'content-type': 'text/html',
@@ -74,7 +97,10 @@ before(async () => {
     });
     res.end('<!doctype html><html><body><h1>upstream</h1></body></html>');
   });
-  await new Promise((r) => upstream.listen(UPSTREAM, '127.0.0.1', r));
+  // Bind the upstream on an OS-assigned port and read back what it got,
+  // rather than choosing a number and hoping.
+  await new Promise((r) => upstream.listen(0, '127.0.0.1', r));
+  UPSTREAM = upstream.address().port;
 });
 
 after(async () => {
@@ -128,10 +154,14 @@ describe('init', { skip }, () => {
     // Offering to put a TLS proxy in front of PostgreSQL helps nobody.
     const { createServer } = await import('node:net');
     const silent = createServer((socket) => socket.write('not-http\r\n'));
-    await new Promise((r) => silent.listen(39831, '127.0.0.1', r));
+    // OS-assigned: a fixed number is a bet against whatever else is on the
+    // machine, and on Windows against the machine itself -- Hyper-V and WSL
+    // reserve blocks of the dynamic range, differently on every host.
+    await new Promise((r) => silent.listen(0, '127.0.0.1', r));
+    const silentPort = silent.address().port;
     try {
       const { speaksHttp } = await import('../src/collect/port-scan.js');
-      assert.equal(await speaksHttp(39831), false, 'a non-HTTP listener must be rejected');
+      assert.equal(await speaksHttp(silentPort), false, 'a non-HTTP listener must be rejected');
       assert.equal(await speaksHttp(UPSTREAM), true, 'the real web server must be accepted');
     } finally {
       silent.close();

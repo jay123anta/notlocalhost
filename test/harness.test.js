@@ -550,11 +550,12 @@ describe('doctor checks are read-only and complete', () => {
   test('a busy port is reported as blocked, with a way to find the holder', async () => {
     const { createServer } = await import('node:http');
     const srv = createServer((_, res) => res.end('x'));
-    await new Promise((r) => srv.listen(39811, '127.0.0.1', r));
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    const busy = srv.address().port;
     try {
-      const result = await checkPorts(process.platform, [39811]);
+      const result = await checkPorts(process.platform, [busy]);
       assert.equal(result.status, 'blocked');
-      assert.match(result.detail, /39811/);
+      assert.match(result.detail, new RegExp(String(busy)));
       assert.ok(result.remedy.some((r) => /netstat|lsof/.test(r)));
     } finally {
       srv.close();
