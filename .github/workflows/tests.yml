@@ -333,11 +333,25 @@ jobs:
 
           run_suite () {
             local name="$1" file="$2" expect="$3"
-            local out code ran
-            out=$(node --test "$file" 2>&1); code=$?
-            ran=$(echo "$out" | grep -E "^# tests " | grep -oE "[0-9]+" | head -1); ran=${ran:-0}
+            local log code ran
 
-            echo "$name: $(echo "$out" | grep -E '^# (tests|pass|fail|skipped)' | tr '\n' ' ')"
+            # Streamed through tee, not captured into a variable.
+            #
+            # This was out=$(node --test ...), printed afterwards. That shows
+            # nothing at all when the process is killed or the shell dies
+            # part-way -- the diagnostic swallowing exactly the case it exists
+            # for. On windows-latest it produced a log that simply stopped
+            # after the previous suite, with no way to tell how far this one
+            # got, or whether it started.
+            log="$RUNNER_TEMP/suite-$name.log"
+            echo "==> running $name ($file)"
+            node --test "$file" 2>&1 | tee "$log"; code=${PIPESTATUS[0]}
+            echo "<== $name exited $code"
+
+            ran=$(grep -E "^# tests " "$log" | grep -oE "[0-9]+" | head -1)
+            ran=${ran:-0}
+
+            echo "$name: $(grep -E '^# (tests|pass|fail|skipped)' "$log" | tr '\n' ' ')"
 
             # A suite that ran nothing proves nothing and exits 0 while doing
             # it. Node reports a wholly-skipped describe as "# tests 0" rather
@@ -347,19 +361,12 @@ jobs:
               echo "::error title=$name proved nothing::expected at least $expect tests, $ran ran"
               failed=1
             fi
-            if echo "$out" | grep -q "^# skipped [1-9]"; then
+            if grep -q "^# skipped [1-9]" "$log"; then
               echo "::error title=$name skipped tests::CI must run every test"
               failed=1
             fi
             if [ "$code" -ne 0 ]; then
-              # The whole output, not a grep of it. A suite can fail without
-              # printing "not ok" at all -- an import that throws, a crash
-              # before the first test -- and grepping for the failure shape we
-              # expect is how a run becomes undiagnosable from its own log.
-              echo "----- full output: $name -----"
-              echo "$out"
-              echo "----- end: $name -----"
-              echo "::error title=$name failed::exit $code; full output above"
+              echo "::error title=$name failed::exit $code; its output is above, streamed live"
               failed=1
             fi
           }
