@@ -6,7 +6,7 @@ import { chromium } from 'playwright-core';
 import { locateBrowser } from './browser/locate.js';
 import { runSession } from './session.js';
 import { scanLoopbackPorts } from './collect/port-scan.js';
-import { createDeploymentModel, parseOrigin } from './collect/origins.js';
+import { createDeploymentModel, parseOrigin, sharesDefaultCookieJar } from './collect/origins.js';
 import { runRules } from './rules/index.js';
 import { severityRank, atOrAbove } from './rules/finding.js';
 import { VERSION, SCHEMA_VERSION } from './version.js';
@@ -74,10 +74,12 @@ export async function analyze(options) {
 
   // Probe for neighbours before we navigate, so the port list reflects the
   // machine as the developer left it rather than as our own browser left it.
-  const openPorts =
-    noPortScan || !target.isLoopback
-      ? []
-      : await scanLoopbackPorts({ exclude: Number(target.port) }).catch(() => []);
+  //
+  // Only worth doing when the target is in the jar those neighbours share. On
+  // app.myproject.localhost the scan would find the same ports and mean nothing
+  // by them, so it is skipped rather than reported as an empty result.
+  const scanUseful = !noPortScan && sharesDefaultCookieJar(target.hostname);
+  const openPorts = scanUseful ? await scanLoopbackPorts({ exclude: Number(target.port) }).catch(() => []) : [];
   if (openPorts.length) log(`other loopback listeners: ${openPorts.join(', ')}`);
 
   const capture = await runSession({
@@ -138,7 +140,7 @@ export async function analyze(options) {
       cookiesObserved: capture.setCookies.length,
       instrumentationEvents: capture.instrumentation.length,
       otherLoopbackListeners: openPorts,
-      portScanSkipped: noPortScan || !target.isLoopback,
+      portScanSkipped: !scanUseful,
       timing: capture.timing,
     },
     counts,

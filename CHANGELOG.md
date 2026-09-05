@@ -20,6 +20,10 @@ field is removed or retyped. Adding a field is not breaking.
   loopback. The rule tested "is this loopback", which is a different question,
   and reported a hazard that cannot occur. A false positive in a tool people
   run to be warned is worse than a missing rule: it teaches them to skim.
+- The loopback port scan is skipped when its result could not be used, instead
+  of running and being discarded. On a `.localhost` subdomain the analyzer no
+  longer lists neighbouring dev servers that share nothing with the page, and
+  `coverage.portScanSkipped` reports `true` for the scan it genuinely skipped.
 
 ## [0.1.0] - 2026-09-04
 

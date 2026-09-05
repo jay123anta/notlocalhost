@@ -7,6 +7,7 @@ import {
   sameOrigin,
   sameSite,
   isLoopbackHost,
+  sharesDefaultCookieJar,
   parseOrigin,
   createDeploymentModel,
   classifyRequest,
@@ -109,6 +110,21 @@ describe('origin and site classification', () => {
     }
     for (const h of ['example.com', 'localhost.example.com', '192.168.1.5']) {
       assert.equal(isLoopbackHost(h), false, `${h} should not be loopback`);
+    }
+  });
+
+  // The two predicates look alike and mean different things. Conflating them
+  // is what put a cookie hazard on hostnames that cannot have one.
+  test('the shared cookie jar is narrower than loopback', () => {
+    for (const h of ['localhost', 'LOCALHOST', '127.0.0.1', '127.1.2.3', '::1', '[::1]']) {
+      assert.equal(sharesDefaultCookieJar(h), true, `${h} is in the common jar`);
+    }
+    for (const h of ['app.localhost', 'api.myproject.localhost']) {
+      assert.equal(isLoopbackHost(h), true, `${h} is still loopback`);
+      assert.equal(sharesDefaultCookieJar(h), false, `${h} has a jar of its own`);
+    }
+    for (const h of ['example.com', '192.168.1.5', '', null, undefined]) {
+      assert.equal(sharesDefaultCookieJar(h), false, `${h} is not local at all`);
     }
   });
 

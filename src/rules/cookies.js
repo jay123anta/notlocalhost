@@ -8,7 +8,7 @@
 import { parseSetCookie, parseDocumentCookieWrite, effectiveSameSite } from '../collect/cookie-parser.js';
 import { inspectCookieForConditionalFlags, scanSourceForConditionalFlags } from '../collect/conditional-flags.js';
 import { finding, REF } from './finding.js';
-import { parseOrigin, isLoopbackHost } from '../collect/origins.js';
+import { parseOrigin, isLoopbackHost, sharesDefaultCookieJar } from '../collect/origins.js';
 import { describeSystemPort } from '../collect/port-scan.js';
 
 /** Names that mean "losing this cookie logs the user out or breaks CSRF". */
@@ -303,10 +303,7 @@ export function cookieRules(ctx) {
   // as `localhost` or `127.0.0.1`; a page on app.myproject.localhost shares
   // nothing with them, even though that name is also loopback. Checking only
   // "is this loopback" reported the hazard on subdomains where it cannot occur.
-  const sharesTheDefaultJar =
-    target?.isLoopback && (target.hostname === 'localhost' || /^(127\.|::1|0:0:)/.test(target.hostname));
-
-  if (sharesTheDefaultJar && hostOnly.length) {
+  if (sharesDefaultCookieJar(target?.hostname) && hostOnly.length) {
     const others = openPorts.filter((p) => String(p) !== target.port);
     // A system service on a well-known port is in the same jar, but it is not
     // another app of yours and nothing can be done about it. Counting it as one
