@@ -296,6 +296,13 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
 
+    # Only to look up the latest Caddy release. Anonymous api.github.com allows
+    # 60 requests an hour per IP, and hosted runners share addresses, so a job
+    # can be rate-limited without having made a request of its own. The harness
+    # needs no token when a person runs it on their own machine.
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -345,8 +352,14 @@ jobs:
               failed=1
             fi
             if [ "$code" -ne 0 ]; then
-              echo "$out" | grep -B2 -A12 "^    not ok" | head -60
-              echo "::error title=$name failed::see the output above"
+              # The whole output, not a grep of it. A suite can fail without
+              # printing "not ok" at all -- an import that throws, a crash
+              # before the first test -- and grepping for the failure shape we
+              # expect is how a run becomes undiagnosable from its own log.
+              echo "----- full output: $name -----"
+              echo "$out"
+              echo "----- end: $name -----"
+              echo "::error title=$name failed::exit $code; full output above"
               failed=1
             fi
           }

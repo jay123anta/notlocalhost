@@ -42,7 +42,7 @@ import {
   CONFIG_VERSION,
 } from '../src/harness/config.js';
 import { renderCaddyfile, summariseSites, isUnmodified } from '../src/harness/caddyfile.js';
-import { assetFor, parseChecksums, digest } from '../src/harness/caddy.js';
+import { assetFor, parseChecksums, digest, getJson } from '../src/harness/caddy.js';
 import { checkDns, checkCertTrust, checkPorts, checkProxy, runAllChecks, hostsPath } from '../src/harness/checks.js';
 import { caRootPath, describeCertificate, trustState, removeCommandFor } from '../src/harness/trust.js';
 
@@ -571,5 +571,115 @@ describe('doctor checks are read-only and complete', () => {
     assert.match(checkCertTrust('linux').detail, /nssdb/);
     assert.equal(checkDns('linux').evidence.hostsPath, '/etc/hosts');
     assert.match(hostsPath('win32'), /drivers[\\/]etc[\\/]hosts$/);
+  });
+});
+
+describe('the release lookup fails in the ways this call actually fails', () => {
+  const reply = (status, headers = {}, body = { ok: true }) => ({
+    ok: status >= 200 && status < 300,
+    status,
+    headers: { get: (k) => headers[k.toLowerCase()] ?? null },
+    json: async () => body,
+  });
+  const noSleep = () => Promise.resolve();
+
+  test('a token is used when the environment already has one', async () => {
+    let seen = null;
+    await getJson('https://example.test/x', {
+      env: { GITHUB_TOKEN: 'abc123' },
+      fetchImpl: async (_url, init) => {
+        seen = init.headers;
+        return reply(200);
+      },
+      sleep: noSleep,
+    });
+    assert.equal(seen.authorization, 'Bearer abc123');
+  });
+
+  test('no token is invented when the environment has none', async () => {
+    let seen = null;
+    await getJson('https://example.test/x', {
+      env: {},
+      fetchImpl: async (_url, init) => {
+        seen = init.headers;
+        return reply(200);
+      },
+      sleep: noSleep,
+    });
+    assert.equal(seen.authorization, undefined);
+  });
+
+  // GitHub answers a rate limit with 403, not 429, so the obvious check misses
+  // it and reports "returned 403" -- which sends people looking for a
+  // permissions problem they do not have.
+  test('a rate limit is named as one, with when it lifts', async () => {
+    const resetAt = Math.floor((Date.now() + 20 * 60 * 1000) / 1000);
+    await assert.rejects(
+      () =>
+        getJson('https://example.test/x', {
+          env: {},
+          sleep: noSleep,
+          fetchImpl: async () =>
+            reply(403, { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': String(resetAt) }),
+        }),
+      (err) => {
+        assert.match(err.message, /rate-limited/i);
+        assert.match(err.message, /60\/hour/, 'it must say why an unauthenticated machine hits this');
+        assert.match(err.message, /2[01] minutes/, 'and roughly when it lifts');
+        return true;
+      },
+    );
+  });
+
+  test('a 403 that is not a rate limit is not mislabelled as one', async () => {
+    await assert.rejects(
+      () => getJson('https://example.test/x', { env: {}, sleep: noSleep, fetchImpl: async () => reply(403) }),
+      (err) => {
+        assert.match(err.message, /returned 403/);
+        assert.doesNotMatch(err.message, /rate-limited/i);
+        return true;
+      },
+    );
+  });
+
+  test('a server error is retried, a missing resource is not', async () => {
+    let calls = 0;
+    const body = await getJson('https://example.test/x', {
+      env: {},
+      sleep: noSleep,
+      fetchImpl: async () => (++calls < 3 ? reply(500) : reply(200, {}, { tag_name: 'v2.0.0' })),
+    });
+    assert.equal(body.tag_name, 'v2.0.0');
+    assert.equal(calls, 3, 'it must actually have retried');
+
+    let notFound = 0;
+    await assert.rejects(() =>
+      getJson('https://example.test/x', {
+        env: {},
+        sleep: noSleep,
+        fetchImpl: async () => {
+          notFound++;
+          return reply(404);
+        },
+      }),
+    );
+    assert.equal(notFound, 1, 'a 404 will not change on a retry');
+  });
+
+  test('a network failure is retried and then reported', async () => {
+    let calls = 0;
+    await assert.rejects(
+      () =>
+        getJson('https://example.test/x', {
+          env: {},
+          sleep: noSleep,
+          fetchImpl: async () => {
+            calls++;
+            throw new Error('ENOTFOUND');
+          },
+        }),
+      /ENOTFOUND/,
+    );
+    assert.equal(calls, 3);
   });
 });

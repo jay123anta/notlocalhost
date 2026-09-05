@@ -95,15 +95,68 @@ export function caddyVersion(path) {
 
 // ---------------------------------------------------------------- download
 
-async function getJson(url) {
-  const res = await fetch(url, { headers: { accept: 'application/vnd.github+json', 'user-agent': 'notlocalhost' } });
-  if (!res.ok) throw new Error(`${url} returned ${res.status}`);
-  return res.json();
+/**
+ * Ask GitHub for JSON, with the two failures this call actually has.
+ *
+ * Anonymous api.github.com allows 60 requests an hour per IP. That is plenty
+ * for one developer and nothing at all for a shared address: CI runners, and
+ * anyone behind a corporate NAT, reach it without having made a single request
+ * themselves. It presents as 403 with a rate-limit header, not 429, and the
+ * unhelpful version of this function reported it as "returned 403".
+ *
+ * A token is used when the environment already has one. None is required, none
+ * is requested, and nothing is stored -- this only avoids throwing away a
+ * credential the caller already has.
+ */
+export async function getJson(url, { env = process.env, attempts = 3, sleep = defaultSleep, fetchImpl = fetch } = {}) {
+  const token = env.GITHUB_TOKEN || env.GH_TOKEN || null;
+  const headers = {
+    accept: 'application/vnd.github+json',
+    'user-agent': 'notlocalhost',
+    ...(token ? { authorization: `Bearer ${token}` } : {}),
+  };
+
+  let lastError = null;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    let res;
+    try {
+      res = await fetchImpl(url, { headers });
+    } catch (err) {
+      lastError = err;
+      if (attempt < attempts) await sleep(attempt * 1000);
+      continue;
+    }
+
+    if (res.ok) return res.json();
+
+    const remaining = res.headers.get('x-ratelimit-remaining');
+    const rateLimited = res.status === 429 || (res.status === 403 && remaining === '0');
+
+    if (rateLimited) {
+      const resetAt = Number(res.headers.get('x-ratelimit-reset')) * 1000;
+      const mins = Number.isFinite(resetAt) ? Math.max(1, Math.ceil((resetAt - Date.now()) / 60000)) : null;
+      throw new Error(
+        `GitHub rate-limited this machine${token ? '' : ' (no token, so the anonymous limit of 60/hour applies)'}. ` +
+          (mins ? `It resets in about ${mins} minute${mins === 1 ? '' : 's'}. ` : '') +
+          'Install Caddy yourself, or set GITHUB_TOKEN, to skip this lookup entirely.',
+      );
+    }
+
+    lastError = new Error(`${url} returned ${res.status}`);
+    // 5xx is worth another go; a 404 is not going to change.
+    if (res.status < 500 || attempt === attempts) throw lastError;
+    await sleep(attempt * 1000);
+  }
+  throw lastError ?? new Error(`${url} could not be reached`);
+}
+
+function defaultSleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 /** Latest release metadata, reduced to what we need. */
-export async function latestRelease() {
-  const r = await getJson(RELEASE_API);
+export async function latestRelease(opts = {}) {
+  const r = await getJson(RELEASE_API, opts);
   return {
     version: r.tag_name,
     assets: Object.fromEntries((r.assets ?? []).map((a) => [a.name, a.browser_download_url])),
