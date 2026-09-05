@@ -30,7 +30,7 @@ const SEVERITY_VALUES = ['will-break', 'may-break', 'info', 'none'];
  * previously worked changes meaning. Only something that previously failed
  * starts succeeding.
  */
-export const SUBCOMMANDS = ['init', 'up', 'down', 'doctor'];
+export const SUBCOMMANDS = ['init', 'up', 'down', 'doctor', 'diff'];
 
 const HELP = `
 notlocalhost ${VERSION}
@@ -118,6 +118,7 @@ EXAMPLES
 export function parseArgs(argv) {
   const options = {
     command: 'analyze',
+    args: [],
     url: null,
     flow: null,
     json: undefined,
@@ -312,6 +313,14 @@ export function parseArgs(argv) {
             break;
           }
 
+          // Once a subcommand is chosen, further positionals belong to it.
+          // `analyze` keeps its old behaviour exactly: one target, and a
+          // second one is still an error, because that is shipped surface.
+          if (options.command !== 'analyze') {
+            options.args.push(arg);
+            break;
+          }
+
           if (options.url) throw new UsageError(`unexpected second target "${arg}"`);
           options.url = arg;
         }
@@ -326,8 +335,24 @@ export function parseArgs(argv) {
 
   // A subcommand operates on the project directory, not on a URL.
   if (options.command !== 'analyze') {
-    if (options.url) {
+    // `diff` is the one subcommand that takes arguments. For every other, a
+    // positional is a mistake and must produce the message it always has --
+    // collecting them silently turned a clear usage error into a no-op.
+    if (options.url || (options.command !== 'diff' && options.args.length)) {
       return { ok: false, error: `"${options.command}" does not take a URL. It works on the project in this directory.` };
+    }
+    if (options.command === 'diff' && options.args.length !== 2) {
+      return {
+        ok: false,
+        error: [
+          'diff needs two reports: the one from plain HTTP and the one from real HTTPS.',
+          '',
+          '  notlocalhost http://localhost:3000 --json before.json',
+          '  notlocalhost up --yes',
+          '  notlocalhost https://app.myproject.localhost --json after.json',
+          '  notlocalhost diff before.json after.json',
+        ].join('\n'),
+      };
     }
     return { ok: true, options };
   }
@@ -388,6 +413,52 @@ export async function run(argv, io = {}) {
   // Harness subcommands operate on the project directory rather than a URL.
   // Loaded on demand so that `notlocalhost <url>` -- the shipped path -- pays
   // nothing for code it never touches.
+  // The parity diff reads two documents and writes one. It needs no browser
+  // and no project, so it is handled before the harness commands, which need
+  // both.
+  if (o.command === 'diff') {
+    try {
+      const { readFileSync } = await import('node:fs');
+      const { compareReports } = await import('./diff/compare.js');
+      const { renderDiff, diffExitCode } = await import('./diff/terminal.js');
+
+      const load = (p) => {
+        let text;
+        try {
+          text = readFileSync(p, 'utf8');
+        } catch {
+          throw Object.assign(new Error(`Cannot read ${p}`), { code: 'USAGE' });
+        }
+        try {
+          return JSON.parse(text);
+        } catch (err) {
+          throw Object.assign(new Error(`${p} is not valid JSON: ${err.message}`), { code: 'USAGE' });
+        }
+      };
+
+      const [beforePath, afterPath] = o.args;
+      const diff = compareReports(load(beforePath), load(afterPath));
+
+      if (o.json === true) {
+        stdout.write(`${JSON.stringify(diff, null, 2)}\n`);
+      } else {
+        if (o.json) {
+          const { writeFileSync } = await import('node:fs');
+          writeFileSync(o.json, `${JSON.stringify(diff, null, 2)}\n`);
+        }
+        if (!o.quiet) stdout.write(`${renderDiff(diff, { styler: c })}\n`);
+        if (o.json) stdout.write(`  json    ${o.json}\n`);
+      }
+      return diffExitCode(diff, { failOn: o.failOn ?? 'will-break' });
+    } catch (err) {
+      if (err.code === 'USAGE') {
+        stderr.write(`${c.red('error')}: ${err.message}\n`);
+        return EXIT.USAGE;
+      }
+      return reportFailure(err, stderr, c, o);
+    }
+  }
+
   if (o.command !== 'analyze') {
     try {
       const { runHarnessCommand } = await import('./harness/commands.js');

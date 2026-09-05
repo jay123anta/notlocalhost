@@ -20,6 +20,7 @@ export const TEST_FILES = [
   'test/unit.test.js',
   'test/e2e.test.js',
   'test/report.test.js',
+  'test/diff.test.js',
   'test/harness.test.js',
   'test/lifecycle.test.js',
 ];

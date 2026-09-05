@@ -50,9 +50,10 @@
     "test:compat": "node --test test/compat.test.js",
     "test:harness": "node --test test/harness.test.js",
     "test:lifecycle": "node --test test/lifecycle.test.js",
-    "test:raw": "node --test test/compat.test.js test/unit.test.js test/e2e.test.js test/report.test.js test/harness.test.js test/lifecycle.test.js",
+    "test:raw": "node --test test/compat.test.js test/unit.test.js test/e2e.test.js test/report.test.js test/diff.test.js test/harness.test.js test/lifecycle.test.js",
     "smoke": "node scripts/smoke.mjs",
-    "prepublishOnly": "npm run lint && node scripts/prepublish-check.mjs"
+    "prepublishOnly": "npm run lint && node scripts/prepublish-check.mjs",
+    "test:diff": "node --test test/diff.test.js"
   },
   "dependencies": {
     "playwright-core": "^1.56.0"

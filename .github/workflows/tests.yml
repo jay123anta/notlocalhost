@@ -112,8 +112,8 @@ jobs:
       - name: Analyzer suites, judged by output rather than exit code
         run: >-
           node scripts/check-test-output.mjs
-          test/compat.test.js test/unit.test.js test/e2e.test.js test/report.test.js
-          --min 120
+          test/compat.test.js test/unit.test.js test/e2e.test.js test/report.test.js test/diff.test.js
+          --min 140
 
       # The e2e suite skips itself when no browser is present, which would let a
       # broken browser lookup pass CI silently. Fail loudly instead.
