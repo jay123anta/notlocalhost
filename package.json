@@ -40,7 +40,7 @@
     "node": ">=20.0.0"
   },
   "scripts": {
-    "test": "node --test test/unit.test.js test/e2e.test.js test/report.test.js",
+    "test": "node --test test/compat.test.js test/unit.test.js test/e2e.test.js test/report.test.js",
     "lint": "node scripts/syntax-check.mjs",
     "evidence": "node evidence/repro-port-sharing.mjs",
     "test:unit": "node --test test/unit.test.js",
@@ -48,7 +48,8 @@
     "fixture": "node test/fixtures/lying-app.mjs",
     "test:report": "node --test test/report.test.js",
     "smoke": "node scripts/smoke.mjs",
-    "prepublishOnly": "npm run lint && node scripts/prepublish-check.mjs"
+    "prepublishOnly": "npm run lint && node scripts/prepublish-check.mjs",
+    "test:compat": "node --test test/compat.test.js"
   },
   "dependencies": {
     "playwright-core": "^1.56.0"
