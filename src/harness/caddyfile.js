@@ -90,3 +90,28 @@ export function isUnmodified(existing, cfg, opts) {
   const normalise = (s) => s.replace(/\r\n/g, '\n').trimEnd();
   return normalise(existing) === normalise(renderCaddyfile(cfg, opts));
 }
+
+/**
+ * Did we write this file, whatever ports it was written for?
+ *
+ * "Not what we would generate now" is not the same as "hand-edited". A
+ * Caddyfile from an earlier run on different ports fails that test, and
+ * treating it as the user's work silently discarded the --http-port and
+ * --https-port they had just asked for: the proxy came back up on the old
+ * ports and the new ones answered nothing at all.
+ *
+ * The port numbers are the one thing allowed to differ, so they are the one
+ * thing ignored here. Anything else changed and the file is the user's to keep.
+ */
+export function isOursForAnyPorts(existing, cfg) {
+  if (typeof existing !== 'string') return false;
+  const PORT_LINE = /^\s*https?_port\s+\d+\s*$/;
+  const stripPorts = (s) =>
+    s
+      .replace(/\r\n/g, '\n')
+      .split('\n')
+      .filter((l) => !PORT_LINE.test(l))
+      .join('\n')
+      .trimEnd();
+  return stripPorts(existing) === stripPorts(renderCaddyfile(cfg, {}));
+}

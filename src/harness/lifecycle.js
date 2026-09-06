@@ -35,7 +35,7 @@ import {
   describeChanges,
   TIERS,
 } from './config.js';
-import { renderCaddyfile, isUnmodified } from './caddyfile.js';
+import { renderCaddyfile, isOursForAnyPorts } from './caddyfile.js';
 import { resolveCaddy } from './caddy.js';
 import { trustCa, untrustCa, caRootPath, describeCertificate } from './trust.js';
 import { applyBlock, removeBlock, digestOfFile, previewBlock, findBlock } from './hosts.js';
@@ -173,12 +173,7 @@ export async function up(opts = {}) {
   // just asked for. A file we could have generated ourselves, for any ports,
   // is ours to replace.
   const existing = existsSync(caddyfilePath) ? readFileSync(caddyfilePath, 'utf8') : null;
-  const oursForSomePorts =
-    existing !== null &&
-    (isUnmodified(existing, config, { httpPort, httpsPort }) ||
-      isUnmodified(existing, config, { httpPort: state.running?.httpPort ?? 80, httpsPort: state.running?.httpsPort ?? 443 }) ||
-      isUnmodified(existing, config, {}));
-  if (existing !== null && !oursForSomePorts) {
+  if (existing !== null && !isOursForAnyPorts(existing, config)) {
     log('keeping your edited Caddyfile; delete it to regenerate');
   } else {
     mkdirSync(harnessDir(cwd), { recursive: true });
@@ -242,9 +237,13 @@ export async function up(opts = {}) {
       [
         `The proxy did not stay running: ${detail}.`,
         '',
-        `Its output is in ${logPath}`,
-        'The usual cause is a port already in use. `notlocalhost doctor` names the holder,',
-        'or pass different ports with --http-port and --https-port.',
+        `Caddy said why in ${logPath} -- read that first; it names the actual cause.`,
+        '',
+        'Commonly one of:',
+        '  - a port already in use     `notlocalhost doctor` names the holder,',
+        '                              or pass --http-port / --https-port',
+        '  - an edited Caddyfile       delete .notlocalhost/Caddyfile to regenerate it',
+        '  - an upstream that moved    check the ports in .notlocalhost/config.json',
       ].join('\n'),
     );
     e.code = 'PROXY_FAILED';

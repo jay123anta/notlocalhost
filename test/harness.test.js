@@ -41,7 +41,7 @@ import {
   fileDigest,
   CONFIG_VERSION,
 } from '../src/harness/config.js';
-import { renderCaddyfile, summariseSites, isUnmodified } from '../src/harness/caddyfile.js';
+import { renderCaddyfile, summariseSites, isUnmodified, isOursForAnyPorts } from '../src/harness/caddyfile.js';
 import { assetFor, parseChecksums, digest, getJson } from '../src/harness/caddy.js';
 import { checkDns, checkCertTrust, checkPorts, checkProxy, runAllChecks, hostsPath } from '../src/harness/checks.js';
 import { caRootPath, describeCertificate, trustState, removeCommandFor, digestsIn } from '../src/harness/trust.js';
@@ -814,5 +814,32 @@ describe('review findings: the ledger and the consent screen', () => {
     applyBlock(p, 'two', ['a.two.test']);
 
     assert.equal(readFileSync(`${p}.notlocalhost-backup`, 'utf8'), original, 'the backup must still be the pristine file');
+  });
+});
+
+describe('a Caddyfile from an earlier run is ours, whatever ports it used', () => {
+  // F5. "Not what we would generate now" was treated as "hand-edited", so a
+  // second up with different ports kept the old file and the ports the caller
+  // had just asked for answered nothing.
+  const cfg = defaultConfig({ cwd: '/p/demo', upstreams: [{ port: 3000 }] });
+  const onEightyEighty = renderCaddyfile(cfg, { httpPort: 8080, httpsPort: 8443 });
+
+  test('the same file written for other ports is recognised as ours', () => {
+    assert.equal(isUnmodified(onEightyEighty, cfg, { httpPort: 8081, httpsPort: 8444 }), false, 'the old test really did say no');
+    assert.equal(isOursForAnyPorts(onEightyEighty, cfg), true);
+  });
+
+  test('a genuine edit is still the user\'s to keep', () => {
+    assert.equal(isOursForAnyPorts(`${onEightyEighty}\n# my own note\n`, cfg), false);
+    assert.equal(isOursForAnyPorts(onEightyEighty.replace('reverse_proxy', 'respond'), cfg), false);
+  });
+
+  test('only the port numbers are ignored, not the directives', () => {
+    const withoutSkipTrust = onEightyEighty.replace(/\n\tskip_install_trust/, '');
+    assert.equal(isOursForAnyPorts(withoutSkipTrust, cfg), false, 'a removed safety directive is an edit');
+  });
+
+  test('a missing file is not ours', () => {
+    assert.equal(isOursForAnyPorts(null, cfg), false);
   });
 });
