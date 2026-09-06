@@ -25,7 +25,7 @@
 import { X509Certificate } from 'node:crypto';
 import { execFile, execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, posix } from 'node:path';
 import { platform, homedir } from 'node:os';
 import { promisify } from 'node:util';
 
@@ -196,7 +196,11 @@ export async function trustCa({ env = process.env, log = () => {}, certPath = ca
   } catch (err) {
     const e = new Error(
       `Could not install the certificate authority.\n\n${firstLines(err)}\n\n` +
-        remedyForTrustFailure(String(err?.stderr ?? err?.message ?? '')),
+        // Both, joined. `??` kept an empty stderr -- which execFile sets on a
+        // spawn failure -- so the message naming the missing program never
+        // reached the code whose job is to explain it. The two carry different
+        // halves of the story and neither is reliably the useful one.
+        remedyForTrustFailure([err?.stderr, err?.message].filter(Boolean).join(' ')),
     );
     e.code = 'TRUST_FAILED';
     throw e;
@@ -239,29 +243,87 @@ export async function trustCa({ env = process.env, log = () => {}, certPath = ca
  * as it can: the per-user store on Windows, Chrome's own NSS database on Linux.
  * macOS has no per-user equivalent that browsers honour, so it prompts.
  */
-async function installRoot(certPath) {
-  if (OS === 'win32') {
+/**
+ * The exact command each platform needs, as data rather than as control flow.
+ *
+ * Separated so it can be tested from any machine. The one bug this module has
+ * had twice -- addressing a certificate by a subject that every Caddy on the
+ * machine shares -- lives entirely in command construction, and could not be
+ * caught from a different OS while the commands were built inline behind a
+ * platform check. There is no Mac here, and there will not always be one.
+ *
+ * @param {'win32'|'darwin'|string} os
+ * @returns {{ command: string, args: string[], opts?: object }}
+ */
+export function installCommand(os, certPath, home = homedir()) {
+  if (os === 'win32') {
     // -user writes the current account's store, which Chrome and Edge read and
     // which needs no elevation.
-    return run('certutil', ['-user', '-addstore', '-f', 'Root', certPath], { timeout: 120_000, windowsHide: true });
+    return { command: 'certutil', args: ['-user', '-addstore', '-f', 'Root', certPath], opts: { windowsHide: true } };
   }
-
-  if (OS === 'darwin') {
-    return run(
-      'sudo',
-      ['security', 'add-trusted-cert', '-d', '-r', 'trustRoot', '-k', '/Library/Keychains/System.keychain', certPath],
-      { timeout: 120_000 },
-    );
+  if (os === 'darwin') {
+    return {
+      command: 'sudo',
+      args: ['security', 'add-trusted-cert', '-d', '-r', 'trustRoot', '-k', '/Library/Keychains/System.keychain', certPath],
+    };
   }
-
   // Linux: Chrome reads ~/.pki/nssdb and needs no root for it.
-  const nssdb = join(homedir(), '.pki', 'nssdb');
-  await run('mkdir', ['-p', nssdb], { timeout: 20_000 }).catch(() => {});
-  return run(
-    'certutil',
-    ['-d', `sql:${nssdb}`, '-A', '-t', 'C,,', '-n', NSS_NICKNAME, '-i', certPath],
-    { timeout: 120_000 },
-  );
+  return {
+    command: 'certutil',
+    args: ['-d', `sql:${nssdbPath(home)}`, '-A', '-t', 'C,,', '-n', NSS_NICKNAME, '-i', certPath],
+  };
+}
+
+/**
+ * @param {'win32'|'darwin'|string} os
+ * @param {{ sha1?: string }|string} cert
+ */
+export function removalCommand(os, cert, home = homedir()) {
+  const sha1 = typeof cert === 'string' ? cert : cert?.sha1;
+  if (os === 'win32') {
+    if (!sha1) throw new Error('no thumbprint recorded, so the exact certificate cannot be identified');
+    return { command: 'certutil', args: ['-user', '-delstore', 'Root', sha1], opts: { windowsHide: true } };
+  }
+  if (os === 'darwin') {
+    // By hash, never by common name. "Caddy Local Authority" is the subject of
+    // every Caddy authority on the machine, including ones this project never
+    // installed, so -c would delete somebody else's root and report success.
+    if (!sha1) throw new Error('no SHA-1 recorded, so the exact certificate cannot be identified');
+    return { command: 'sudo', args: ['security', 'delete-certificate', '-Z', sha1.toUpperCase(), '-t'] };
+  }
+  return { command: 'certutil', args: ['-d', `sql:${nssdbPath(home)}`, '-D', '-n', NSS_NICKNAME] };
+}
+
+async function installRoot(certPath) {
+  if (OS !== 'win32' && OS !== 'darwin') {
+    // Check the tool exists before creating anything.
+    //
+    // The database directory has to exist before certutil will add to it, but
+    // creating it first meant a machine without NSS tools -- where the install
+    // cannot succeed at all -- was left with a new empty directory in the
+    // user's home that nothing would ever remove. `up` failing is not a reason
+    // to leave something behind.
+    try {
+      await run('certutil', ['-H'], { timeout: 20_000 });
+    } catch (err) {
+      if (err?.code === 'ENOENT') throw err;
+      // Any other failure means certutil is present; -H exits non-zero by design.
+    }
+    await run('mkdir', ['-p', join(homedir(), '.pki', 'nssdb')], { timeout: 20_000 }).catch(() => {});
+  }
+  const { command, args, opts } = installCommand(OS, certPath);
+  return run(command, args, { timeout: 120_000, ...(opts ?? {}) });
+}
+
+/**
+ * Where Chrome keeps its own certificate database.
+ *
+ * Always POSIX: this database exists only on Linux, so joining with the host
+ * separator is wrong whenever the command is built anywhere else -- which is
+ * exactly what testing it from another machine does.
+ */
+function nssdbPath(home) {
+  return posix.join(home.replace(/\\/g, '/'), '.pki', 'nssdb');
 }
 
 /** The nickname the Linux trust check looks for, so the two cannot drift. */
@@ -313,24 +375,8 @@ export async function untrustCa({ fingerprint, certificate, env = process.env, l
  * platform addresses certificates, rather than by a name several could share.
  */
 async function removeRoot(cert) {
-  if (OS === 'win32') {
-    // By thumbprint, not by name. Several authorities can share a subject, and
-    // deleting by name would remove certificates this project never installed.
-    const id = typeof cert === 'string' ? cert : cert?.sha1;
-    if (!id) throw new Error('no thumbprint recorded, so the exact certificate cannot be identified');
-    return run('certutil', ['-user', '-delstore', 'Root', id], { timeout: 120_000, windowsHide: true });
-  }
-  if (OS === 'darwin') {
-    // By SHA-1 hash, not by common name. "Caddy Local Authority" is the subject
-    // of every Caddy authority on the machine, including ones this project
-    // never installed and any belonging to another project, so -c would delete
-    // somebody else's root and report success.
-    const sha1 = typeof cert === 'string' ? null : cert?.sha1;
-    if (!sha1) throw new Error('no SHA-1 recorded, so the exact certificate cannot be identified');
-    return run('sudo', ['security', 'delete-certificate', '-Z', sha1.toUpperCase(), '-t'], { timeout: 120_000 });
-  }
-  const nssdb = join(homedir(), '.pki', 'nssdb');
-  return run('certutil', ['-d', `sql:${nssdb}`, '-D', '-n', NSS_NICKNAME], { timeout: 120_000 });
+  const { command, args, opts } = removalCommand(OS, cert);
+  return run(command, args, { timeout: 120_000, ...(opts ?? {}) });
 }
 
 /** The exact command to remove one certificate, for when we could not. */
@@ -349,7 +395,23 @@ function firstLines(err) {
  * Trust failures are nearly always one of three things, and each has a
  * different answer. Guessing wrongly sends people to the wrong place.
  */
-function remedyForTrustFailure(stderr) {
+export function remedyForTrustFailure(stderr) {
+  // The most common Linux failure by a distance, and "spawn certutil ENOENT"
+  // names a program the user has never heard of rather than the package that
+  // provides it. Chrome's trust store is an NSS database and this is the only
+  // tool that writes it.
+  if (/ENOENT/.test(stderr) && OS !== 'win32' && OS !== 'darwin') {
+    return [
+      'The certutil that manages the Chrome certificate store is not installed.',
+      'It ships separately from the browser:',
+      '',
+      '  Debian, Ubuntu   sudo apt install libnss3-tools',
+      '  Fedora, RHEL     sudo dnf install nss-tools',
+      '  Arch             sudo pacman -S nss',
+      '',
+      'The harness still serves HTTPS without it; the browser will warn on each new hostname.',
+    ].join(String.fromCharCode(10));
+  }
   if (/denied|not permitted|EPERM|administrator/i.test(stderr)) {
     return OS === 'win32'
       ? 'Access was denied. On Windows the per-user store normally needs no elevation, so this\nusually means group policy is restricting it. Run `notlocalhost doctor`, which names that case.'

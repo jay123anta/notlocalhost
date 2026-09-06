@@ -321,19 +321,48 @@ export async function down(opts = {}) {
         : `could not stop pid ${state.running.pid}: ${killed.error}`,
     });
     log(killed.ok ? 'proxy stopped' : `proxy could not be stopped: ${killed.error}`);
+    // Settled debts leave the ledger. It is kept only for what is still owed,
+    // so a second `down` reports the step that failed rather than replaying
+    // the ones that already succeeded.
+    if (killed.ok) state.running = null;
   }
 
   // ---- certificate authority ----------------------------------------------
   if (state.caTrusted) {
+    // An install that never completed is a different thing from one that did.
+    //
+    // `attempting` means trustCa was entered and did not report success, so on
+    // a machine without the platform's certificate tool -- no certutil on
+    // Linux, the common case -- there is nothing installed and nothing to
+    // remove. Reporting that as a failed removal puts a red step in front of
+    // someone every time they run `down`, for work that never happened.
+    const neverCompleted = state.caTrusted === 'attempting';
     const result = await untrustCa({ fingerprint: state.ca?.fingerprint, certificate: state.ca, env, log });
-    steps.push({
-      what: 'remove the certificate authority',
-      ok: result.removed,
-      detail: result.removed
-        ? 'removed from the trust store, verified absent'
-        : `the trust store reports "${result.state}"`,
-      advice: result.advice,
-    });
+    if (neverCompleted && result.state !== 'present') {
+      steps.push({
+        what: 'remove the certificate authority',
+        ok: true,
+        detail:
+          result.state === 'absent'
+            ? 'the install never completed and the store confirms nothing is there'
+            : 'the install never completed, so there is nothing to remove (the store could not be queried to confirm)',
+      });
+      state.caTrusted = false;
+      state.ca = null;
+    } else {
+      steps.push({
+        what: 'remove the certificate authority',
+        ok: result.removed,
+        detail: result.removed
+          ? 'removed from the trust store, verified absent'
+          : `the trust store reports "${result.state}"`,
+        advice: result.advice,
+      });
+      if (result.removed) {
+        state.caTrusted = false;
+        state.ca = null;
+      }
+    }
   }
 
   // ---- hosts ---------------------------------------------------------------

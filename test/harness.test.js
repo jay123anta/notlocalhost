@@ -44,7 +44,7 @@ import {
 import { renderCaddyfile, summariseSites, isUnmodified, isOursForAnyPorts } from '../src/harness/caddyfile.js';
 import { assetFor, parseChecksums, digest, getJson } from '../src/harness/caddy.js';
 import { checkDns, checkCertTrust, checkPorts, checkProxy, runAllChecks, hostsPath } from '../src/harness/checks.js';
-import { caRootPath, describeCertificate, trustState, removeCommandFor, digestsIn } from '../src/harness/trust.js';
+import { caRootPath, describeCertificate, trustState, removeCommandFor, digestsIn, remedyForTrustFailure, installCommand, removalCommand } from '../src/harness/trust.js';
 
 let tmp;
 before(() => {
@@ -501,10 +501,18 @@ describe('certificate trust', () => {
     assert.ok(!/["']?Caddy Local Authority["']?\s*$/.test(cmd), 'must not delete by subject name');
   });
 
-  test('a certificate that was never installed reports absent', () => {
-    // The whole reversal story rests on this answer being trustworthy.
+  test('a certificate that was never installed is never reported present', () => {
+    // The whole reversal story rests on this answer being trustworthy, and the
+    // property that matters is the one direction: never claim something is
+    // there when it is not.
+    //
+    // "absent" and "unknown" are both honest answers and which one you get is
+    // a fact about the machine, not about the certificate. On a Linux box with
+    // no NSS tools the store cannot be read at all, and demanding "absent"
+    // there asserted that every machine can answer -- which is the assumption
+    // this module exists to reject.
     const c = describeCertificate(FIXTURE);
-    assert.equal(trustState(c.fingerprint), 'absent');
+    assert.notEqual(trustState(c.fingerprint, c.sha1), 'present');
   });
 
   test('an unanswerable query reports unknown, never absent', () => {
@@ -515,7 +523,7 @@ describe('certificate trust', () => {
   });
 
   test('a fingerprint that is not installed is not falsely matched', () => {
-    assert.equal(trustState('f'.repeat(64)), 'absent');
+    assert.notEqual(trustState('f'.repeat(64), 'f'.repeat(40)), 'present');
   });
 });
 
@@ -841,5 +849,87 @@ describe('a Caddyfile from an earlier run is ours, whatever ports it used', () =
 
   test('a missing file is not ours', () => {
     assert.equal(isOursForAnyPorts(null, cfg), false);
+  });
+});
+
+describe('a trust failure explains itself', () => {
+  // execFile sets stderr to '' on a spawn failure, and `??` keeps an empty
+  // string, so the message naming the missing program never reached the code
+  // whose job is to explain it. Found by running up on a Linux box with no
+  // certutil: the output said "spawn certutil ENOENT" and nothing else.
+  test('an empty stderr does not hide the error message', () => {
+    const err = { stderr: '', message: 'spawn certutil ENOENT' };
+    const combined = [err.stderr, err.message].filter(Boolean).join(' ');
+    assert.equal(combined, 'spawn certutil ENOENT');
+    assert.equal(String(err.stderr ?? err.message ?? ''), '', 'the old expression really did drop it');
+  });
+
+  test('a missing certutil names the package that provides it', () => {
+    const remedy = remedyForTrustFailure('spawn certutil ENOENT');
+    if (process.platform === 'win32' || process.platform === 'darwin') {
+      assert.ok(remedy.length > 0, 'other platforms still get some advice');
+    } else {
+      assert.match(remedy, /libnss3-tools/);
+      assert.match(remedy, /nss-tools/);
+      assert.match(remedy, /still serves HTTPS/, 'and says what still works without it');
+    }
+  });
+});
+
+describe('every platform is checked from every platform', () => {
+  // The bug this module has had twice -- addressing a certificate by a subject
+  // that every Caddy on the machine shares -- lives entirely in command
+  // construction. While the commands were built inline behind a platform
+  // check, macOS could only be verified on a Mac, and there is not one here.
+  const CERT = { sha1: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678', fingerprint: 'f'.repeat(64) };
+  const HOME = '/home/dev';
+
+  test('no platform ever deletes by subject name', () => {
+    for (const os of ['win32', 'darwin', 'linux']) {
+      const { command, args } = removalCommand(os, CERT, HOME);
+      const line = [command, ...args].join(' ');
+      assert.ok(!/Caddy Local Authority/i.test(line), `${os} deletes by a shared subject: ${line}`);
+    }
+  });
+
+  test('Windows and macOS address the certificate by its SHA-1', () => {
+    assert.deepEqual(removalCommand('win32', CERT, HOME).args, ['-user', '-delstore', 'Root', CERT.sha1]);
+    assert.deepEqual(removalCommand('darwin', CERT, HOME).args, [
+      'security',
+      'delete-certificate',
+      '-Z',
+      CERT.sha1.toUpperCase(),
+      '-t',
+    ]);
+  });
+
+  test('Linux addresses it by the nickname it installed under, and the two agree', () => {
+    const install = installCommand('linux', '/tmp/root.crt', HOME);
+    const remove = removalCommand('linux', CERT, HOME);
+    const nickIn = install.args[install.args.indexOf('-n') + 1];
+    const nickOut = remove.args[remove.args.indexOf('-n') + 1];
+    assert.equal(nickIn, nickOut, 'installing under one name and removing another removes nothing');
+    assert.ok(install.args.includes(`sql:${HOME}/.pki/nssdb`), 'and both point at the same database');
+    assert.ok(remove.args.includes(`sql:${HOME}/.pki/nssdb`));
+  });
+
+  test('removal refuses rather than guessing when no digest was recorded', () => {
+    for (const os of ['win32', 'darwin']) {
+      assert.throws(() => removalCommand(os, {}, HOME), /cannot be identified/, `${os} must refuse`);
+    }
+  });
+
+  test('no install command needs elevation on Windows or Linux', () => {
+    assert.notEqual(installCommand('win32', '/c.crt', HOME).command, 'sudo');
+    assert.notEqual(installCommand('linux', '/c.crt', HOME).command, 'sudo');
+    assert.equal(installCommand('darwin', '/c.crt', HOME).command, 'sudo', 'macOS has no per-user store browsers honour');
+  });
+
+  test('the certificate path is passed as an argument, never interpolated', () => {
+    const weird = "/home/O'Brien/my dir/root.crt";
+    for (const os of ['win32', 'darwin', 'linux']) {
+      const { args } = installCommand(os, weird, HOME);
+      assert.ok(args.includes(weird), `${os} must pass the path as one argument, unquoted and unsplit`);
+    }
   });
 });

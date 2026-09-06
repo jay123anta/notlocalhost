@@ -172,6 +172,20 @@ Usually fine, and better than most people expect.
 - On Linux, Chrome reads its own NSS database at `~/.pki/nssdb`, which needs no
   root. Chrome-only trust is available even where system-wide trust is not.
 
+  That database is written by `certutil`, which ships **separately from the
+  browser** and is missing on a lot of otherwise complete systems:
+
+  ```
+  Debian, Ubuntu   sudo apt install libnss3-tools
+  Fedora, RHEL     sudo dnf install nss-tools
+  Arch             sudo pacman -S nss
+  ```
+
+  Without it `up` stops at the trust step and says so, naming the package.
+  Nothing is created and nothing is left behind -- the proxy is still stopped
+  by `down`. The harness will also serve HTTPS without it; the certificate is
+  real but untrusted, so the browser warns once per hostname.
+
 ### Port 443 is already bound
 
 Common on Windows, where IIS or the World Wide Web Publishing Service claims it
@@ -211,6 +225,13 @@ surprise.
 ---
 
 ## Honest limitations
+
+- **The certificate install has been exercised end to end on Windows only.**
+  The command each platform runs is unit-tested from any machine, and the
+  Linux failure path -- no NSS tools present -- is exercised on Linux. But a
+  successful install and removal on macOS, and on a Linux box that has
+  `certutil`, has not been observed by this project. Treat `down`'s report as
+  the source of truth there, and check your own store the first time.
 
 - The harness proves behaviour **on the origin it creates**. That origin is a
   faithful HTTPS origin on a real hostname, but it is not your production
