@@ -127,7 +127,7 @@ export function trustState(fingerprint, sha1 = null) {
     if (OS === 'darwin') {
       const out = execFileSync(
         'security',
-        ['find-certificate', '-a', '-Z', '/Library/Keychains/System.keychain'],
+        ['find-certificate', '-a', '-Z', MACOS_KEYCHAIN],
         { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 20_000 },
       );
       const seen = digestsIn(out);
@@ -264,7 +264,7 @@ export function installCommand(os, certPath, home = homedir()) {
   if (os === 'darwin') {
     return {
       command: 'sudo',
-      args: ['security', 'add-trusted-cert', '-d', '-r', 'trustRoot', '-k', '/Library/Keychains/System.keychain', certPath],
+      args: ['security', 'add-trusted-cert', '-d', '-r', 'trustRoot', '-k', MACOS_KEYCHAIN, certPath],
     };
   }
   // Linux: Chrome reads ~/.pki/nssdb and needs no root for it.
@@ -289,7 +289,18 @@ export function removalCommand(os, cert, home = homedir()) {
     // every Caddy authority on the machine, including ones this project never
     // installed, so -c would delete somebody else's root and report success.
     if (!sha1) throw new Error('no SHA-1 recorded, so the exact certificate cannot be identified');
-    return { command: 'sudo', args: ['security', 'delete-certificate', '-Z', sha1.toUpperCase(), '-t'] };
+    // Name the keychain, because the install named it.
+    //
+    // `security delete-certificate` with no keychain searches the user's
+    // default search list, which does not include the system keychain the
+    // certificate was added to. So removal found nothing, reported success,
+    // and left the root installed -- on every Mac, every time. CI caught it on
+    // the first run: the store held one more certificate at the end than at
+    // the start.
+    return {
+      command: 'sudo',
+      args: ['security', 'delete-certificate', '-Z', sha1.toUpperCase(), '-t', MACOS_KEYCHAIN],
+    };
   }
   return { command: 'certutil', args: ['-d', `sql:${nssdbPath(home)}`, '-D', '-n', NSS_NICKNAME] };
 }
@@ -325,6 +336,15 @@ async function installRoot(certPath) {
 function nssdbPath(home) {
   return posix.join(home.replace(/\\/g, '/'), '.pki', 'nssdb');
 }
+
+/**
+ * The keychain macOS trust is added to, removed from, and queried in.
+ *
+ * One constant for all three, because they were three separate literals and
+ * the removal quietly stopped naming it -- which is how a certificate came to
+ * be added to one store and searched for in another.
+ */
+const MACOS_KEYCHAIN = '/Library/Keychains/System.keychain';
 
 /** The nickname the Linux trust check looks for, so the two cannot drift. */
 const NSS_NICKNAME = 'notlocalhost local authority';

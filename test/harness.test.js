@@ -900,6 +900,9 @@ describe('every platform is checked from every platform', () => {
       '-Z',
       CERT.sha1.toUpperCase(),
       '-t',
+      // The keychain the install added to. Omitting it made removal search
+      // the user's default list, find nothing, and report success.
+      '/Library/Keychains/System.keychain',
     ]);
   });
 
@@ -931,5 +934,28 @@ describe('every platform is checked from every platform', () => {
       const { args } = installCommand(os, weird, HOME);
       assert.ok(args.includes(weird), `${os} must pass the path as one argument, unquoted and unsplit`);
     }
+  });
+});
+
+describe('macOS installs into and removes from the same keychain', () => {
+  // CI found this on the first run of the trust round trip: the install added
+  // to the system keychain, the removal named no keychain at all and so
+  // searched the user's default list, found nothing, reported success, and
+  // left the root installed. On every Mac, every time.
+  const CERT = { sha1: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678' };
+
+  test('both commands name the same keychain', () => {
+    const install = installCommand('darwin', '/tmp/root.crt');
+    const remove = removalCommand('darwin', CERT);
+    const keychain = install.args[install.args.indexOf('-k') + 1];
+    assert.match(keychain, /System\.keychain$/);
+    assert.ok(remove.args.includes(keychain), `removal must name ${keychain}, got: ${remove.args.join(' ')}`);
+  });
+
+  test('removal still addresses the certificate by hash', () => {
+    const remove = removalCommand('darwin', CERT);
+    assert.ok(remove.args.includes('-Z'));
+    assert.ok(remove.args.includes(CERT.sha1.toUpperCase()));
+    assert.ok(!remove.args.includes('-c'), 'never by common name');
   });
 });

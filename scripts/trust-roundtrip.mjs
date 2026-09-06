@@ -62,18 +62,41 @@ function rootCount() {
       });
       return (out.match(/^keychain:/gm) ?? []).length;
     }
+
     const nssdb = join(homedir(), '.pki', 'nssdb');
     if (!existsSync(nssdb)) return 0;
     const out = execFileSync('certutil', ['-L', '-d', `sql:${nssdb}`], { encoding: 'utf8', timeout: 60_000 });
-    return out.split('\n').filter((l) => l.trim() && !/^(Certificate Nickname|-{3,})/.test(l)).length;
+    // certutil prints a two-line header: the column names, then the trust
+    // categories indented beneath them. Only the first was being skipped, so
+    // an empty database counted as one certificate and a database holding one
+    // counted as two -- precisely the arithmetic this job exists to check. A
+    // counting function that miscounts is worse than no count: it fails a
+    // correct run, and would pass a wrong one.
+    return out
+      .split('\n')
+      .map((l) => l.trimEnd())
+      .filter((l) => l.trim())
+      .filter((l) => !/^Certificate Nickname/.test(l))
+      .filter((l) => !/^\s+SSL,/.test(l))
+      .filter((l) => !/^-{3,}/.test(l)).length;
   } catch {
     return null;
   }
 }
 
+/**
+ * Report a failure so it survives into the annotation.
+ *
+ * Workflow commands are one line: a raw newline ends the annotation and
+ * everything after it becomes ordinary log output -- which is exactly the part
+ * nobody without repository admin rights can read. Encoding the newlines keeps
+ * the whole message somewhere it can actually be seen.
+ */
 const fail = (message, detail) => {
-  console.error(`\n::error title=trust round trip::${message}`);
-  if (detail) console.error(detail);
+  const full = detail ? `${message}\n${detail}` : String(message);
+  const encoded = full.replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+  console.error(`::error title=trust round trip::${encoded}`);
+  console.error(`\n${full}\n`);
   process.exitCode = 1;
 };
 
