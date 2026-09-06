@@ -304,10 +304,26 @@ export function removalCommand(os, cert, home = homedir()) {
   return { command: 'certutil', args: ['-d', `sql:${nssdbPath(home)}`, '-D', '-n', NSS_NICKNAME] };
 }
 
+/**
+ * Everything a failed command knows about itself.
+ *
+ * An exit status is often the only thing that distinguishes "denied" from
+ * "not found" from "refused by policy", and it was being dropped: a Windows
+ * runner reported a failure whose entire text was the command line, because
+ * certutil wrote nothing to stderr and the status went unread.
+ */
+function describeFailure(err) {
+  const parts = [];
+  if (err?.status !== undefined && err.status !== null) parts.push(`exit ${err.status}`);
+  else if (err?.code !== undefined) parts.push(`code ${err.code}`);
+  const text = [err?.stderr, err?.stdout].filter(Boolean).join('\n').trim();
+  if (text) parts.push(text);
+  else if (err?.message) parts.push(err.message);
+  return parts.join(': ');
+}
+
 async function installRoot(certPath) {
   if (OS !== 'win32' && OS !== 'darwin') {
-    // Check the tool exists before creating anything.
-    //
     // The database directory has to exist before certutil will add to it, but
     // creating it first meant a machine without NSS tools -- where the install
     // cannot succeed at all -- was left with a new empty directory in the
@@ -321,8 +337,40 @@ async function installRoot(certPath) {
     }
     await run('mkdir', ['-p', join(homedir(), '.pki', 'nssdb')], { timeout: 20_000 }).catch(() => {});
   }
+
   const { command, args, opts } = installCommand(OS, certPath);
-  return run(command, args, { timeout: 120_000, ...(opts ?? {}) });
+  try {
+    return await run(command, args, { timeout: 120_000, ...(opts ?? {}) });
+  } catch (err) {
+    if (OS !== 'win32') throw err;
+
+    // Windows has a second way in, and the two fail differently.
+    //
+    // certutil writes its own diagnostics to stdout and can exit non-zero
+    // having printed nothing that explains it -- which is what a hosted runner
+    // produced, leaving a failure whose only text was the command line.
+    // Import-Certificate is the documented route for a non-interactive
+    // session and reports a real error when it refuses.
+    try {
+      await run(
+        'powershell',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          '$ErrorActionPreference = "Stop"; Import-Certificate -FilePath $env:NLH_CERT -CertStoreLocation Cert:\CurrentUser\Root | Out-Null',
+        ],
+        { timeout: 120_000, windowsHide: true, env: { ...process.env, NLH_CERT: certPath } },
+      );
+      return { stdout: '', stderr: '' };
+    } catch (second) {
+      const e = new Error(
+        `certutil and Import-Certificate both refused.\n  certutil: ${describeFailure(err)}\n  powershell: ${describeFailure(second)}`,
+      );
+      e.stderr = '';
+      throw e;
+    }
+  }
 }
 
 /**
@@ -394,8 +442,45 @@ export async function untrustCa({ fingerprint, certificate, env = process.env, l
  * platform addresses certificates, rather than by a name several could share.
  */
 async function removeRoot(cert) {
+  // macOS holds a certificate in two places, and deleting one leaves the other.
+  //
+  // `add-trusted-cert -d` writes the certificate into the system keychain and
+  // a trust setting into the admin trust domain. `delete-certificate` removes
+  // certificates; it does not own the trust settings, and with one still
+  // referring to the certificate the delete is refused. So the setting comes
+  // off first, using the certificate file the ledger recorded, and only then
+  // is the certificate itself removed.
+  if (OS === 'darwin') {
+    const attempts = [];
+    const certPath = typeof cert === 'string' ? null : cert?.path;
+
+    if (certPath && existsSync(certPath)) {
+      try {
+        await run('sudo', ['security', 'remove-trusted-cert', '-d', certPath], { timeout: 120_000 });
+      } catch (err) {
+        // Not fatal on its own: the setting may already be gone, and the
+        // delete below is what actually decides the outcome.
+        attempts.push(`remove-trusted-cert: ${describeFailure(err)}`);
+      }
+    } else {
+      attempts.push('remove-trusted-cert: skipped, the certificate file is no longer on disk');
+    }
+
+    const { command, args } = removalCommand(OS, cert);
+    try {
+      return await run(command, args, { timeout: 120_000 });
+    } catch (err) {
+      attempts.push(`delete-certificate: ${describeFailure(err)}`);
+      throw new Error(attempts.join('\n  '));
+    }
+  }
+
   const { command, args, opts } = removalCommand(OS, cert);
-  return run(command, args, { timeout: 120_000, ...(opts ?? {}) });
+  try {
+    return await run(command, args, { timeout: 120_000, ...(opts ?? {}) });
+  } catch (err) {
+    throw new Error(describeFailure(err));
+  }
 }
 
 /** The exact command to remove one certificate, for when we could not. */
