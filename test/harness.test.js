@@ -895,6 +895,8 @@ describe('every platform is checked from every platform', () => {
   test('Windows and macOS address the certificate by its SHA-1', () => {
     assert.deepEqual(removalCommand('win32', CERT, HOME).args, ['-user', '-delstore', 'Root', CERT.sha1]);
     assert.deepEqual(removalCommand('darwin', CERT, HOME).args, [
+      // -n so sudo refuses rather than waiting on a password nobody can type.
+      '-n',
       'security',
       'delete-certificate',
       '-Z',
@@ -972,6 +974,27 @@ describe('the printed command matches the one that runs', () => {
       if (arg.startsWith('/') && arg.includes('keychain')) {
         assert.ok(advice.includes(arg), `advice omits ${arg}: ${advice}`);
       }
+    }
+  });
+});
+
+describe('a command that touches a trust store can never hang', () => {
+  // Both macOS commands were killed by a timeout rather than failing: they
+  // were waiting on a prompt with nowhere to appear, and a killed process
+  // reports no exit code, so a whole CI run said nothing about why.
+  test('every sudo invocation is non-interactive', () => {
+    for (const build of [installCommand, removalCommand]) {
+      const { command, args } = build('darwin', build === installCommand ? '/tmp/c.crt' : { sha1: 'a'.repeat(40) });
+      if (command === 'sudo') {
+        assert.equal(args[0], '-n', `sudo must not be able to prompt: ${[command, ...args].join(' ')}`);
+      }
+    }
+  });
+
+  test('no platform builds a command that could read from a terminal', () => {
+    for (const os of ['win32', 'darwin', 'linux']) {
+      const { command, args } = removalCommand(os, { sha1: 'a'.repeat(40) });
+      if (command === 'sudo') assert.equal(args[0], '-n', `${os} could prompt`);
     }
   });
 });

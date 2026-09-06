@@ -30,6 +30,19 @@ import { platform, homedir } from 'node:os';
 import { promisify } from 'node:util';
 
 const run = promisify(execFile);
+
+/**
+ * How every command that touches a trust store is run.
+ *
+ * stdin is closed deliberately. These tools prompt -- for a password, for
+ * permission to modify a keychain -- and a prompt with nowhere to appear waits
+ * forever, so the command is killed by a timeout and reports no exit code at
+ * all. With stdin at end-of-file it fails immediately and says why.
+ *
+ * The timeout is short for the same reason: these operations take under a
+ * second when they work, so two minutes of waiting only delays a diagnosis.
+ */
+const TRUST_RUN = { timeout: 30_000, stdio: ['ignore', 'pipe', 'pipe'] };
 const OS = platform();
 
 /**
@@ -264,7 +277,11 @@ export function installCommand(os, certPath, home = homedir()) {
   if (os === 'darwin') {
     return {
       command: 'sudo',
-      args: ['security', 'add-trusted-cert', '-d', '-r', 'trustRoot', '-k', MACOS_KEYCHAIN, certPath],
+      // -n: never prompt. Without it sudo waits on a password that cannot be
+      // typed in a non-interactive session, and the command is eventually
+      // killed by a timeout -- which reports as "no exit code" and explains
+      // nothing. Refusing immediately says exactly what is wrong.
+      args: ['-n', 'security', 'add-trusted-cert', '-d', '-r', 'trustRoot', '-k', MACOS_KEYCHAIN, certPath],
     };
   }
   // Linux: Chrome reads ~/.pki/nssdb and needs no root for it.
@@ -298,7 +315,7 @@ export function removalCommand(os, cert, home = homedir()) {
     // more certificate than it started with.
     return {
       command: 'sudo',
-      args: ['security', 'delete-certificate', '-Z', sha1.toUpperCase(), '-t', MACOS_KEYCHAIN],
+      args: ['-n', 'security', 'delete-certificate', '-Z', sha1.toUpperCase(), '-t', MACOS_KEYCHAIN],
     };
   }
   return { command: 'certutil', args: ['-d', `sql:${nssdbPath(home)}`, '-D', '-n', NSS_NICKNAME] };
@@ -340,7 +357,7 @@ async function installRoot(certPath) {
 
   const { command, args, opts } = installCommand(OS, certPath);
   try {
-    return await run(command, args, { timeout: 120_000, ...(opts ?? {}) });
+    return await run(command, args, { ...TRUST_RUN, ...(opts ?? {}) });
   } catch (err) {
     if (OS !== 'win32') throw err;
 
@@ -349,7 +366,7 @@ async function installRoot(certPath) {
     // certutil writes its own diagnostics to stdout and can exit non-zero
     // having printed nothing that explains it -- which is what a hosted runner
     // produced, leaving a failure whose only text was the command line.
-    // Import-Certificate is the documented route for a non-interactive
+    // The .NET certificate store API is the reliable route for a non-interactive
     // session and reports a real error when it refuses.
     try {
       await run(
@@ -358,14 +375,21 @@ async function installRoot(certPath) {
           '-NoProfile',
           '-NonInteractive',
           '-Command',
-          '$ErrorActionPreference = "Stop"; Import-Certificate -FilePath $env:NLH_CERT -CertStoreLocation Cert:\CurrentUser\Root | Out-Null',
+          // The .NET store API, not Import-Certificate: its Cert: drive comes
+          // from the PKI provider, which at least one hosted runner does not
+          // load -- it reported only that a drive named Cert did not exist.
+          '$ErrorActionPreference = "Stop"; ' +
+            '$store = New-Object System.Security.Cryptography.X509Certificates.X509Store("Root","CurrentUser"); ' +
+            '$store.Open("ReadWrite"); ' +
+            '$store.Add((New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($env:NLH_CERT))); ' +
+            '$store.Close()',
         ],
         { timeout: 120_000, windowsHide: true, env: { ...process.env, NLH_CERT: certPath } },
       );
       return { stdout: '', stderr: '' };
     } catch (second) {
       const e = new Error(
-        `certutil and Import-Certificate both refused.\n  certutil: ${describeFailure(err)}\n  powershell: ${describeFailure(second)}`,
+        `certutil and the .NET store API both refused.\n  certutil: ${describeFailure(err)}\n  powershell: ${describeFailure(second)}`,
       );
       e.stderr = '';
       throw e;
@@ -456,7 +480,7 @@ async function removeRoot(cert) {
 
     if (certPath && existsSync(certPath)) {
       try {
-        await run('sudo', ['security', 'remove-trusted-cert', '-d', certPath], { timeout: 120_000 });
+        await run('sudo', ['-n', 'security', 'remove-trusted-cert', '-d', certPath], TRUST_RUN);
       } catch (err) {
         // Not fatal on its own: the setting may already be gone, and the
         // delete below is what actually decides the outcome.
@@ -468,7 +492,7 @@ async function removeRoot(cert) {
 
     const { command, args } = removalCommand(OS, cert);
     try {
-      return await run(command, args, { timeout: 120_000 });
+      return await run(command, args, TRUST_RUN);
     } catch (err) {
       attempts.push(`delete-certificate: ${describeFailure(err)}`);
       throw new Error(attempts.join('\n  '));
@@ -477,7 +501,7 @@ async function removeRoot(cert) {
 
   const { command, args, opts } = removalCommand(OS, cert);
   try {
-    return await run(command, args, { timeout: 120_000, ...(opts ?? {}) });
+    return await run(command, args, { ...TRUST_RUN, ...(opts ?? {}) });
   } catch (err) {
     throw new Error(describeFailure(err));
   }
