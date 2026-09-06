@@ -446,8 +446,16 @@ export async function run(argv, io = {}) {
           const { writeFileSync } = await import('node:fs');
           writeFileSync(o.json, `${JSON.stringify(diff, null, 2)}\n`);
         }
-        if (!o.quiet) stdout.write(`${renderDiff(diff, { styler: c })}\n`);
-        if (o.json) stdout.write(`  json    ${o.json}\n`);
+        if (!o.quiet) {
+          stdout.write(`${renderDiff(diff, { styler: c })}
+`);
+          // Under --quiet the analyzer prints nothing at all, and this has
+          // to match: a flag meaning one thing for the main command and
+          // something slightly different for a subcommand is a flag nobody
+          // can rely on in a script.
+          if (o.json) stdout.write(`  json    ${o.json}
+`);
+        }
       }
       return diffExitCode(diff, { failOn: o.failOn ?? 'will-break' });
     } catch (err) {

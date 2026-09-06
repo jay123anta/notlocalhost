@@ -439,6 +439,35 @@ to finish by hand.
 
 [**Full documentation, including what happens on a locked-down machine.**](docs/harness.md)
 
+### And then the diff, which is the point of both
+
+```
+notlocalhost http://localhost:3000 --json before.json
+notlocalhost up --yes
+notlocalhost https://app.myproject.localhost --json after.json
+notlocalhost down
+
+notlocalhost diff before.json after.json
+```
+
+The analyzer predicts. The harness provides a real origin. The diff answers
+whether the prediction happened -- and, more usefully, what appeared on the real
+origin that localhost never showed you at all.
+
+It reads two reports and writes one. No browser, no project, no network, so it
+runs in a CI job that has none of those.
+
+It is careful about three things that a subtraction would get wrong: a
+prediction and its confirmation are different findings and must not cancel out;
+some findings could never occur on a real origin and claiming them as fixes
+would be flattery; and two runs that did not cover the same ground cannot be
+compared at all, which it says first rather than in a footnote.
+
+The exit code keys on what is newly visible only. A build should not break twice
+for a defect the analyzer already reported.
+
+[**How each category is decided, and what it cannot tell you.**](docs/diff.md)
+
 Not shipped yet. It lives on a branch until its gate passes on Windows, macOS
 and Linux together, and `0.1.1` on npm contains none of it.
 
