@@ -44,7 +44,7 @@ import {
 import { renderCaddyfile, summariseSites, isUnmodified, isOursForAnyPorts } from '../src/harness/caddyfile.js';
 import { assetFor, parseChecksums, digest, getJson } from '../src/harness/caddy.js';
 import { checkDns, checkCertTrust, checkPorts, checkProxy, runAllChecks, hostsPath } from '../src/harness/checks.js';
-import { caRootPath, describeCertificate, trustState, removeCommandFor, digestsIn, remedyForTrustFailure, installCommand, removalCommand } from '../src/harness/trust.js';
+import { caRootPath, describeCertificate, trustState, removeCommandFor, digestsIn, remedyForTrustFailure, installCommand, removalCommand, describeFailure } from '../src/harness/trust.js';
 
 let tmp;
 before(() => {
@@ -996,5 +996,33 @@ describe('a command that touches a trust store can never hang', () => {
       const { command, args } = removalCommand(os, { sha1: 'a'.repeat(40) });
       if (command === 'sudo') assert.equal(args[0], '-n', `${os} could prompt`);
     }
+  });
+});
+
+describe('a failed command says which kind of failure it was', () => {
+  // A command killed by a timeout reported "code null", which is what two
+  // whole CI runs said about themselves. Hanging and refusing need opposite
+  // responses, so they must not print the same thing.
+  test('a killed process is named as killed, not given a null code', () => {
+    const killed = Object.assign(new Error('Command failed: sudo security ...'), {
+      killed: true,
+      signal: 'SIGTERM',
+      code: null,
+    });
+    const text = describeFailure(killed);
+    assert.match(text, /timed out and was killed/);
+    assert.doesNotMatch(text, /code null/);
+  });
+
+  test('a refusal reports its exit code', () => {
+    assert.match(describeFailure({ code: 5, stderr: 'access denied' }), /exit 5/);
+  });
+
+  test('a missing program is named by its code', () => {
+    assert.match(describeFailure({ code: 'ENOENT', message: 'spawn certutil ENOENT' }), /ENOENT/);
+  });
+
+  test('an error with nothing on it still says something', () => {
+    assert.match(describeFailure({}), /no exit code and no signal/);
   });
 });

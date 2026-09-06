@@ -329,10 +329,27 @@ export function removalCommand(os, cert, home = homedir()) {
  * runner reported a failure whose entire text was the command line, because
  * certutil wrote nothing to stderr and the status went unread.
  */
-function describeFailure(err) {
+export function describeFailure(err) {
   const parts = [];
-  if (err?.status !== undefined && err.status !== null) parts.push(`exit ${err.status}`);
-  else if (err?.code !== undefined) parts.push(`code ${err.code}`);
+
+  // Killed is not refused, and the two need opposite responses.
+  //
+  // execFile reports a signalled process with a null exit code, so a command
+  // killed by the timeout printed "code null" and explained nothing. A command
+  // that hangs is waiting for something -- a password, a confirmation dialog
+  // with no desktop to appear on -- and a command that exits has decided.
+  if (err?.killed || err?.signal) {
+    parts.push(`timed out and was killed (${err.signal ?? 'no signal reported'}); it never exited on its own`);
+  } else if (typeof err?.code === 'number') {
+    parts.push(`exit ${err.code}`);
+  } else if (typeof err?.status === 'number') {
+    parts.push(`exit ${err.status}`);
+  } else if (err?.code) {
+    parts.push(String(err.code));
+  } else {
+    parts.push('failed with no exit code and no signal');
+  }
+
   const text = [err?.stderr, err?.stdout].filter(Boolean).join('\n').trim();
   if (text) parts.push(text);
   else if (err?.message) parts.push(err.message);
