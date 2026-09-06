@@ -32,6 +32,17 @@ export const MINIMUM_TESTS = 200;
  * @param {{ out: string, status: number|null, minimumTests?: number }} input
  * @returns {string[]} problems; empty means the run can be believed
  */
+/** One line, with the characters a workflow command cannot carry escaped. */
+function encodeForAnnotation(text) {
+  return String(text)
+    .split('%')
+    .join('%25')
+    .split(String.fromCharCode(13))
+    .join('%0D')
+    .split(String.fromCharCode(10))
+    .join('%0A');
+}
+
 export function analyseTapOutput({ out, status, minimumTests = MINIMUM_TESTS }) {
   // Normalised: the summary anchors are line-end sensitive and Windows supplies
   // a carriage return that a trailing anchor will not match past.
@@ -109,6 +120,14 @@ if (process.argv[1] && process.argv[1].endsWith('check-test-output.mjs')) {
 
   const problems = analyseTapOutput({ out, status: res.status, minimumTests });
   if (problems.length) {
+    // As an annotation as well, encoded onto one line. A workflow command
+    // ends at its first newline and the rest becomes ordinary log output,
+    // which needs repository admin rights to read -- so a failing run said
+    // only "exit code 1" and every reason was invisible to anyone else.
+    const summary = problems.join(String.fromCharCode(10));
+    console.error(
+      `::error title=test run rejected::${encodeForAnnotation(summary)}`,
+    );
     console.error(`\nRefusing to call this a pass. ${problems.length} problem(s):\n`);
     for (const p of problems) console.error(`  - ${p}`);
     process.exit(1);
