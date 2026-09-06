@@ -84,6 +84,26 @@ export function comparability(before, after) {
     );
   }
 
+  // The order of the two arguments carries meaning, and nothing about a
+  // reversed pair looks wrong on its own: the tool happily reports what
+  // "appeared" when the plain-HTTP run was passed second. Every finding in the
+  // document is then backwards, stated with the same confidence as usual.
+  const scheme = (u) => {
+    try {
+      return new URL(u).protocol;
+    } catch {
+      return null;
+    }
+  };
+  const bScheme = scheme(before.target?.url);
+  const aScheme = scheme(after.target?.url);
+  if (bScheme === 'https:' && aScheme === 'http:') {
+    reasons.push(
+      'the first report is from an HTTPS origin and the second from plain HTTP, which is the ' +
+        'wrong way round -- pass the plain-HTTP report first, or every difference below is inverted',
+    );
+  }
+
   const bc = before.coverage ?? {};
   const ac = after.coverage ?? {};
 

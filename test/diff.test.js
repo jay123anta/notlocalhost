@@ -266,3 +266,30 @@ describe('a malformed report is rejected where it can be explained', () => {
     assert.throws(() => compareReports({ findings: 'lots' }, report([])), /findings array/);
   });
 });
+
+describe('the order of the two reports carries meaning', () => {
+  // Nothing about a reversed pair looks wrong on its own: the tool happily
+  // reports what "appeared" when the plain-HTTP run is passed second, and
+  // every finding is then backwards, stated with the usual confidence.
+  const httpRun = report([], { target: { url: 'http://localhost:3000' } });
+  const httpsRun = report([], { target: { url: 'https://app.demo.localhost' } });
+
+  test('a swapped pair is refused rather than answered', () => {
+    const c = comparability(httpsRun, httpRun);
+    assert.equal(c.ok, false);
+    assert.match(c.reasons.join(' '), /wrong way round/);
+  });
+
+  test('the right way round is not flagged', () => {
+    assert.deepEqual(comparability(httpRun, httpsRun), { ok: true, reasons: [] });
+  });
+
+  test('two plain-HTTP runs are allowed, since that is a legitimate comparison', () => {
+    assert.deepEqual(comparability(httpRun, httpRun), { ok: true, reasons: [] });
+  });
+
+  test('an unparseable target is not mistaken for a swap', () => {
+    const odd = report([], { target: { url: 'not a url' } });
+    assert.deepEqual(comparability(odd, httpsRun), { ok: true, reasons: [] });
+  });
+});

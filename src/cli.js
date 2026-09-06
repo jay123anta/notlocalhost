@@ -437,7 +437,16 @@ export async function run(argv, io = {}) {
       };
 
       const [beforePath, afterPath] = o.args;
-      const diff = compareReports(load(beforePath), load(afterPath));
+      // A file that is not a report is the caller's mistake, not the tool's.
+      // Reporting it as a tool failure told someone to open an issue about
+      // their own typo, and buried the one thing they needed to know.
+      let diff;
+      try {
+        diff = compareReports(load(beforePath), load(afterPath));
+      } catch (err) {
+        if (err?.code === 'USAGE') throw err;
+        throw Object.assign(new Error(err.message), { code: 'USAGE' });
+      }
 
       if (o.json === true) {
         stdout.write(`${JSON.stringify(diff, null, 2)}\n`);
