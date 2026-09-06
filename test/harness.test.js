@@ -959,3 +959,19 @@ describe('macOS installs into and removes from the same keychain', () => {
     assert.ok(!remove.args.includes('-c'), 'never by common name');
   });
 });
+
+describe('the printed command matches the one that runs', () => {
+  // Three times now the same shape: one call site fixed, its twin left behind.
+  // The advice is what a person types when automatic removal failed, so the
+  // two disagreeing is worst exactly when it matters.
+  test('the advice and the real removal name the same keychain', () => {
+    const cert = { sha1: 'a'.repeat(40), fingerprint: 'b'.repeat(64) };
+    const advice = removeCommandFor(cert);
+    const real = removalCommand(process.platform, cert);
+    for (const arg of real.args) {
+      if (arg.startsWith('/') && arg.includes('keychain')) {
+        assert.ok(advice.includes(arg), `advice omits ${arg}: ${advice}`);
+      }
+    }
+  });
+});

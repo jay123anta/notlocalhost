@@ -402,13 +402,24 @@ async function removeRoot(cert) {
 /** The exact command to remove one certificate, for when we could not. */
 export function removeCommandFor(cert) {
   if (OS === 'win32') return `certutil -user -delstore Root ${cert?.sha1 ?? '<thumbprint>'}`;
-  if (OS === 'darwin') return `sudo security delete-certificate -Z ${cert?.sha1?.toUpperCase() ?? '<thumbprint>'}`;
+  if (OS === 'darwin') {
+    // Names the keychain, because the removal that actually runs names it.
+    // This is the command a person is told to type when automatic removal
+    // failed, so it being subtly different from the real one is the worst
+    // possible time for the two to disagree.
+    return `sudo security delete-certificate -Z ${cert?.sha1?.toUpperCase() ?? '<thumbprint>'} -t ${MACOS_KEYCHAIN}`;
+  }
   return `certutil -d sql:$HOME/.pki/nssdb -D -n "${NSS_NICKNAME}"`;
 }
 
 function firstLines(err) {
-  const text = String(err?.stderr || err?.stdout || err?.message || err);
-  return text.split('\n').filter((l) => l.trim()).slice(0, 4).join('\n');
+  const text = [err?.stderr, err?.stdout, err?.message].filter(Boolean).join('\n') || String(err);
+  const lines = text.split('\n').map((l) => l.trimEnd()).filter((l) => l.trim());
+  if (lines.length <= 8) return lines.join('\n');
+  // Both ends. certutil narrates what it is doing and reports the failure at
+  // the very end, so the first few lines are the part that looks like success
+  // -- which is exactly what a Windows CI failure showed, and all it showed.
+  return [...lines.slice(0, 4), `  ... ${lines.length - 8} more lines ...`, ...lines.slice(-4)].join('\n');
 }
 
 /**

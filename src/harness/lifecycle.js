@@ -355,7 +355,11 @@ export async function down(opts = {}) {
         ok: result.removed,
         detail: result.removed
           ? 'removed from the trust store, verified absent'
-          : `the trust store reports "${result.state}"`,
+          : // The command's own error, not just the resulting state. Reporting
+            // only `present` says the removal did not work without saying why,
+            // and the why is the only part anyone can act on.
+            `the trust store reports "${result.state}"` + (result.error ? `
+${result.error}` : ''),
         advice: result.advice,
       });
       if (result.removed) {
