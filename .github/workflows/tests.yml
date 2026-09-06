@@ -418,3 +418,47 @@ jobs:
             exit 1
           fi
           echo "doctor exited $code"
+
+  # The one thing the suites deliberately never do.
+  #
+  # Every lifecycle test passes trust: false, because a test that writes to a
+  # developer's real trust store is not one anybody should run by accident. The
+  # consequence was that the most consequential code here -- the part that puts
+  # a root certificate on a machine -- had only ever been exercised by hand, on
+  # one operating system, by one person.
+  #
+  # A throwaway runner is the right place to do it for real. The assertion that
+  # matters is not that removal reported success: it is that the store holds
+  # exactly as many roots afterwards as it did before. A removal that deletes
+  # the wrong certificate reports success and fails that count -- and deleting
+  # the wrong certificate is a bug this project has actually shipped, on macOS,
+  # where every Caddy authority shares a subject.
+  trust:
+    name: trust round trip (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+
+      # Chrome's certificate store on Linux is an NSS database, and the tool
+      # that writes it ships separately from the browser. Without this the job
+      # would exercise the failure path rather than the install.
+      - name: Install the NSS tools Chrome's store needs
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libnss3-tools
+
+      - name: Install a CA, verify it, remove it, verify the store is unchanged
+        run: node scripts/trust-roundtrip.mjs
