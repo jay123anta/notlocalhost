@@ -30,7 +30,7 @@ const STATUS_ORDER = { blocked: 0, 'needs-elevation': 1, 'will-download': 2, fai
 export async function diagnose(opts = {}) {
   const { cwd = process.cwd() } = opts;
 
-  const checks = await runAllChecks();
+  const checks = await runAllChecks(undefined, cwd);
 
   // What this project has asked for, and what has actually been done to the
   // machine on its behalf. Reported separately because they diverge whenever
@@ -58,7 +58,11 @@ export async function diagnose(opts = {}) {
   // in the store that nothing recorded, both mean the ledger is wrong -- and a
   // wrong ledger is how a machine ends up with something left behind.
   if (state?.caTrusted && state.ca?.fingerprint) {
-    const actual = trustState(state.ca.fingerprint);
+    // Both digests, for the same reason trust.js records both: Windows
+    // certutil prints SHA-1, so passing only the SHA-256 fingerprint never
+    // matches and doctor reports a correctly installed authority as missing --
+    // then exits 1 on a machine that is fine.
+    const actual = trustState(state.ca.fingerprint, state.ca.sha1);
     checks.push({
       id: 'ca-ledger',
       title: 'Recorded certificate authority',

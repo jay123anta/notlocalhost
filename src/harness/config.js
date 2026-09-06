@@ -169,6 +169,16 @@ export function fileDigest(path) {
  */
 export function describeChanges(cfg, { caddySource, httpPort, httpsPort } = {}) {
   const tier = TIERS[cfg.tier];
+  if (!tier) {
+    // config.json is documented as safe to edit, so a wrong value here is a
+    // user mistake and deserves the message `init` would give, not a stack
+    // trace from a property lookup two frames away.
+    const e = new Error(
+      `Unknown tier "${cfg.tier}" in config.json. It must be ${Object.keys(TIERS).map((t) => `"${t}"`).join(' or ')}.`,
+    );
+    e.code = 'BAD_TIER';
+    throw e;
+  }
   const out = [];
 
   out.push({

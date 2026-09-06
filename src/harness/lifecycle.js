@@ -38,7 +38,7 @@ import {
 import { renderCaddyfile, isUnmodified } from './caddyfile.js';
 import { resolveCaddy } from './caddy.js';
 import { trustCa, untrustCa, caRootPath, describeCertificate } from './trust.js';
-import { applyBlock, removeBlock, digestOfFile, previewBlock } from './hosts.js';
+import { applyBlock, removeBlock, digestOfFile, previewBlock, findBlock } from './hosts.js';
 import { hostsPath as defaultHostsPath } from './checks.js';
 import { scanLoopbackPorts, speaksHttp } from '../collect/port-scan.js';
 
@@ -167,7 +167,18 @@ export async function up(opts = {}) {
   // ---- configuration -------------------------------------------------------
   const caddyfilePath = join(harnessDir(cwd), 'Caddyfile');
   const rendered = renderCaddyfile(config, { httpPort, httpsPort });
-  if (existsSync(caddyfilePath) && !isUnmodified(readFileSync(caddyfilePath, 'utf8'), config, { httpPort, httpsPort })) {
+  // "Not what we would generate" is not the same as "hand-edited". A Caddyfile
+  // written by an earlier run on different ports also fails that test, and
+  // keeping it silently discarded the --http-port and --https-port the caller
+  // just asked for. A file we could have generated ourselves, for any ports,
+  // is ours to replace.
+  const existing = existsSync(caddyfilePath) ? readFileSync(caddyfilePath, 'utf8') : null;
+  const oursForSomePorts =
+    existing !== null &&
+    (isUnmodified(existing, config, { httpPort, httpsPort }) ||
+      isUnmodified(existing, config, { httpPort: state.running?.httpPort ?? 80, httpsPort: state.running?.httpsPort ?? 443 }) ||
+      isUnmodified(existing, config, {}));
+  if (existing !== null && !oursForSomePorts) {
     log('keeping your edited Caddyfile; delete it to regenerate');
   } else {
     mkdirSync(harnessDir(cwd), { recursive: true });
@@ -178,14 +189,29 @@ export async function up(opts = {}) {
   // Recorded before it is attempted, so a crash between the two still leaves
   // `down` something to work from.
   if (TIERS[config.tier].needsHostsEntry) {
+    const previousHosts = state.hosts;
     const before = digestOfFile(hostsFile);
     state.hosts = { path: hostsFile, digestBefore: before, hostnames: config.sites.map((s) => s.host), applied: false };
     writeState(state, cwd);
 
     const result = applyBlock(hostsFile, config.project, config.sites.map((s) => s.host));
-    state.hosts.applied = result.changed;
+    // `changed: false` means the block was already there, which happens on a
+    // second `up` after a reboot or a killed proxy. Recording applied:false
+    // then made `down` skip the hosts step entirely and report success while
+    // leaving the entries behind. What matters is whether the block is
+    // present and therefore owed, not whether this particular run wrote it.
+    const present = result.changed || findBlock(readFileSync(hostsFile, 'utf8'), config.project).present;
+    state.hosts.applied = present;
+    state.hosts.wroteThisRun = result.changed;
+    // A digest taken from an already-modified file is not the original. Keep
+    // whichever earlier run recorded a genuine before-state.
+    if (!result.changed && previousHosts?.digestBefore) {
+      state.hosts.digestBefore = previousHosts.digestBefore;
+      state.hosts.backup = previousHosts.backup ?? result.backup;
+    } else {
+      state.hosts.backup = result.backup;
+    }
     state.hosts.digestAfter = result.after;
-    state.hosts.backup = result.backup;
     writeState(state, cwd);
     log(result.changed ? `added ${config.sites.length} hostnames to ${hostsFile}` : 'hosts file already had the entries');
   }
@@ -199,8 +225,36 @@ export async function up(opts = {}) {
     stdio: ['ignore', openLog(logPath), openLog(logPath)],
     windowsHide: true,
   });
+  // spawn reports failure asynchronously. Without a listener an ENOENT becomes
+  // an uncaught exception, and without checking for an early exit `up` prints
+  // "Up." naming a pid that is already gone -- usually because the port is
+  // busy, which is the most ordinary way for this to fail.
+  let spawnError = null;
+  child.on('error', (err) => {
+    spawnError = err;
+  });
   child.unref();
 
+  await new Promise((r) => setTimeout(r, 400));
+  if (spawnError || child.exitCode !== null || !isAlive(child.pid)) {
+    const detail = spawnError ? spawnError.message : `it exited with code ${child.exitCode ?? 'unknown'}`;
+    const e = new Error(
+      [
+        `The proxy did not stay running: ${detail}.`,
+        '',
+        `Its output is in ${logPath}`,
+        'The usual cause is a port already in use. `notlocalhost doctor` names the holder,',
+        'or pass different ports with --http-port and --https-port.',
+      ].join('\n'),
+    );
+    e.code = 'PROXY_FAILED';
+    throw e;
+  }
+
+  // The project name is what `down` looks for in the hosts file. config.json
+  // is documented as intent, safe to edit or delete, so the name has to be in
+  // the ledger too or a deleted config leaves an unremovable block.
+  state.project = config.project;
   state.running = { pid: child.pid, startedAt: new Date().toISOString(), httpPort, httpsPort, logPath };
   writeState(state, cwd);
   log(`proxy started (pid ${child.pid})`);
@@ -298,7 +352,20 @@ export async function down(opts = {}) {
   }
 
   // ---- project files -------------------------------------------------------
-  clearState(cwd);
+  // The ledger is cleared only when there is nothing left owed.
+  //
+  // It used to be cleared unconditionally, so a step that failed -- a declined
+  // password, a locked trust store -- had its record deleted along with the
+  // steps that succeeded. The next `down` then said there was nothing to undo,
+  // and the certificate or the hosts block could never be removed by this tool
+  // again. Keeping the ledger is what makes a second attempt possible.
+  const unfinished = steps.filter((s) => !s.ok);
+  if (unfinished.length === 0) {
+    clearState(cwd);
+  } else {
+    writeState(state, cwd);
+  }
+
   if (purge) {
     rmSync(harnessDir(cwd), { recursive: true, force: true });
     steps.push({ what: 'remove .notlocalhost/', ok: true, detail: 'deleted, including the downloaded proxy' });

@@ -248,3 +248,21 @@ describe('a confirmation has to be news', () => {
     assert.equal(accountedBefore, 2, `every prior finding must land in exactly one category (total ${total})`);
   });
 });
+
+describe('a malformed report is rejected where it can be explained', () => {
+  // F11. The renderer reached finding.severity.padEnd several screens later
+  // and crashed with no clue which document was at fault.
+  test('a finding with no severity names the document it came from', () => {
+    const bad = { id: 'x.y', title: 't' };
+    assert.throws(() => compareReports(report([bad]), report([])), /first report contains a finding/);
+    assert.throws(() => compareReports(report([]), report([bad])), /second report contains a finding/);
+  });
+
+  test('an unknown severity is refused rather than ranked as -1', () => {
+    assert.throws(() => compareReports(report([f('x.y', 'catastrophic', 'a')]), report([])), /unknown severity/);
+  });
+
+  test('findings must be an array, not merely present', () => {
+    assert.throws(() => compareReports({ findings: 'lots' }, report([])), /findings array/);
+  });
+});

@@ -120,8 +120,21 @@ export function comparability(before, after) {
  * @param {object} after   a report from the real HTTPS origin
  */
 export function compareReports(before, after) {
-  if (!before?.findings || !after?.findings) {
+  if (!Array.isArray(before?.findings) || !Array.isArray(after?.findings)) {
     throw new Error('both documents must be notlocalhost reports with a findings array');
+  }
+
+  // A finding without an id or a severity is not one this can reason about,
+  // and the renderer would crash on it several screens later with no clue
+  // where the bad document came from. Say it here, naming the document.
+  for (const [label, doc] of [['first', before], ['second', after]]) {
+    for (const f of doc.findings) {
+      if (typeof f?.id !== 'string' || !SEVERITY_ORDER.includes(f?.severity)) {
+        throw new Error(
+          `the ${label} report contains a finding with no id or an unknown severity: ${JSON.stringify(f).slice(0, 120)}`,
+        );
+      }
+    }
   }
 
   const afterByKey = new Map(after.findings.map((f) => [keyOf(f), f]));

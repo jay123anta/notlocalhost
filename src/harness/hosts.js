@@ -150,7 +150,12 @@ export function applyBlock(path, project, hostnames, opts = {}) {
 
   // Copy first. A failure between here and the write leaves something to
   // recover from, which matters when the file is the machine's name resolution.
-  copyFileSync(path, backupPath);
+  //
+  // Never overwrite an existing backup. A second apply -- different hostnames,
+  // a re-run after a reboot -- would otherwise replace the pristine copy with
+  // one that already contains our block, and the only untouched version of the
+  // file would be gone.
+  if (!existsSync(backupPath)) copyFileSync(path, backupPath);
   writeAtomically(path, updated);
 
   return { changed: true, before, after: digestOf(updated), backup: backupPath };

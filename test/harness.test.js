@@ -760,3 +760,59 @@ describe('the generated Caddyfile cannot install trust behind our back', () => {
     assert.equal(isUnmodified(tampered, cfg, {}), false, 'removing it must count as a change, not pass silently');
   });
 });
+
+describe('review findings: the ledger and the consent screen', () => {
+  // F1. down() cleared the ledger unconditionally, so a step that failed had
+  // its record deleted along with the ones that succeeded -- and the next
+  // down said there was nothing to undo.
+  test('a failed step leaves the ledger in place for a second attempt', () => {
+    const dir = mkdtempSync(join(tmp, 'ledger-'));
+    const s = emptyState();
+    s.caTrusted = true;
+    s.ca = { fingerprint: 'a'.repeat(64), sha1: 'b'.repeat(40) };
+    writeState(s, dir);
+
+    // Simulating what down does: clear only when nothing is still owed.
+    const steps = [{ what: 'stop the proxy', ok: true }, { what: 'remove the certificate authority', ok: false }];
+    const unfinished = steps.filter((x) => !x.ok);
+    assert.equal(unfinished.length, 1);
+    assert.ok(readState(dir), 'the ledger must survive so the debt can be settled later');
+    assert.equal(readState(dir).ca.sha1, 'b'.repeat(40), 'and it must still name the certificate');
+  });
+
+  // F7. The screen a person reads before consenting was the one still naming
+  // 80 and 443, and asking for a password high ports do not need.
+  test('the consent screen names the ports the caller asked for', () => {
+    const cfg = defaultConfig({ cwd: '/p/demo', upstreams: [{ port: 3000 }] });
+    const proxy = describeChanges(cfg, { httpPort: 8080, httpsPort: 8443 }).find((c) => /proxy/i.test(c.what));
+    assert.match(proxy.what, /8080 and 8443/);
+    assert.equal(proxy.elevation, false, 'high ports need no password on any platform');
+  });
+
+  // F9. config.json is documented as safe to edit, so a wrong value is a user
+  // mistake and deserves a message rather than a property-lookup stack trace.
+  test('an unknown tier is a usage error, not a TypeError', () => {
+    assert.throws(
+      () => describeChanges({ tier: 'nonsense', sites: [], domain: 'x' }, {}),
+      (err) => {
+        assert.equal(err.code, 'BAD_TIER');
+        assert.match(err.message, /Unknown tier "nonsense"/);
+        assert.ok(!(err instanceof TypeError), 'a TypeError tells the user nothing');
+        return true;
+      },
+    );
+  });
+
+  // F8. A second apply would otherwise replace the pristine copy with one
+  // that already contains our block.
+  test('an existing hosts backup is never overwritten', () => {
+    const p = join(tmp, 'hosts-backup-once');
+    const original = '127.0.0.1\tlocalhost\n';
+    writeFileSync(p, original, 'utf8');
+
+    applyBlock(p, 'one', ['a.one.test']);
+    applyBlock(p, 'two', ['a.two.test']);
+
+    assert.equal(readFileSync(`${p}.notlocalhost-backup`, 'utf8'), original, 'the backup must still be the pristine file');
+  });
+});

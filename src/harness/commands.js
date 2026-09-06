@@ -71,7 +71,11 @@ export async function runHarnessCommand(command, options, io) {
       // that neither can be exercised without the other being visible.
       if (!options.yes) {
         stdout.write(`\n${c.bold('This will change your machine:')}\n\n`);
-        writeChanges(stdout, c, describeChanges(config, {}));
+        // The ports actually being asked for. The other call site was fixed
+        // and this one was not, so the screen a person reads before consenting
+        // was the one still naming 80 and 443 -- and asking for a password on
+        // macOS and Linux that high ports do not need.
+        writeChanges(stdout, c, describeChanges(config, { httpPort: options.httpPort, httpsPort: options.httpsPort }));
         stdout.write(`  Re-run with ${c.bold('--yes')} to proceed. Nothing has been changed.\n\n`);
         return EXIT.CLEAN;
       }

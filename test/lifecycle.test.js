@@ -417,10 +417,25 @@ describe('an interrupted trust install is still recorded', { skip }, () => {
     await new Promise((r) => upstreamSrv.listen(0, '127.0.0.1', r));
     port = upstreamSrv.address().port;
 
-    // A real certificate, in a scratch data directory Caddy would use.
+    // The proxy has to actually run: `up` now refuses to report success with a
+    // dead pid, and without this the test passed while nothing was listening.
+    const dest = join(harnessDir(scratch), 'caddy');
+    mkdirSync(dest, { recursive: true });
+    const binName = process.platform === 'win32' ? 'caddy.exe' : 'caddy';
+    writeFileSync(join(dest, binName), readFileSync(caddy.path));
+    if (process.platform !== 'win32') {
+      const { chmodSync } = await import('node:fs');
+      chmodSync(join(dest, binName), 0o755);
+    }
+
+    // Caddy generates its own authority into this directory once it runs.
+    //
+    // An earlier version pre-seeded a fixture certificate here to make the
+    // wait succeed. Caddy then found a root with no matching private key and
+    // exited immediately -- which the test never noticed, because `up` did not
+    // check whether the process it started was still alive. Letting Caddy
+    // create the real thing is both more honest and the only way this passes.
     caPath = join(scratch, 'data', 'caddy', 'pki', 'authorities', 'local', 'root.crt');
-    mkdirSync(join(scratch, 'data', 'caddy', 'pki', 'authorities', 'local'), { recursive: true });
-    writeFileSync(caPath, readFileSync(join(process.cwd(), 'test', 'fixtures', 'ca-root.pem')));
   });
 
   after(async () => {
