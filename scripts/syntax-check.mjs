@@ -9,8 +9,9 @@
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
+const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SKIP_DIRS = new Set(['node_modules', '.git', 'evidence', 'coverage']);
 
 function walk(dir, out = []) {
@@ -48,6 +49,15 @@ for (const file of files) {
 
   if (/\bnavigator\.sendBeacon\s*\(\s*['"`]https?:/.test(src)) {
     problems.push(`${rel}: looks like it phones home`);
+  }
+
+  // A file URL percent-encodes whatever a path may legally contain, and a
+  // space is the common one: C:\Users\First Last arrives as First%20Last and
+  // every read of it fails. fileURLToPath decodes it; .pathname does not.
+  if (/import\.meta\.url[^\n]*\.pathname/.test(src)) {
+    problems.push(
+      `${rel}: takes .pathname from import.meta.url, which stays percent-encoded; use fileURLToPath`,
+    );
   }
 }
 

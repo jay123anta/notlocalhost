@@ -16,8 +16,9 @@ import { mkdtempSync, rmSync, readFileSync, existsSync, writeFileSync } from 'no
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import net from 'node:net';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = resolve(new URL('..', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
+const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const APP_PORT = 39501;
 const API_PORT = 39502;
 const URL_ = `http://localhost:${APP_PORT}`;
