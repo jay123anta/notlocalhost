@@ -226,12 +226,22 @@ surprise.
 
 ## Honest limitations
 
-- **The certificate install has been exercised end to end on Windows only.**
-  The command each platform runs is unit-tested from any machine, and the
-  Linux failure path -- no NSS tools present -- is exercised on Linux. But a
-  successful install and removal on macOS, and on a Linux box that has
-  `certutil`, has not been observed by this project. Treat `down`'s report as
-  the source of truth there, and check your own store the first time.
+- **The full install-and-removal cycle is proven on Linux and Windows, and not
+  on macOS.** Linux runs it on every push: install, verify, remove, verify, and
+  confirm the store holds exactly as many roots as before. Windows has been run
+  the same way by hand. macOS has not been run anywhere.
+
+  It is not for want of trying. Changing certificate trust settings on macOS
+  raises a confirmation dialog, and a continuous-integration runner has no
+  interactive session for one to appear on -- so the command does not fail, it
+  waits until it is killed. The same is true of adding a root to the Windows
+  per-user store, through two unrelated mechanisms. On a real desktop these
+  prompt and you answer them; in a headless environment they cannot be
+  answered at all.
+
+  So on macOS, treat `down`'s report as the thing to check rather than the
+  thing to trust, and look at your own keychain the first time. If it leaves
+  something behind, `down` prints the exact command to remove it.
 
 - The harness proves behaviour **on the origin it creates**. That origin is a
   faithful HTTPS origin on a real hostname, but it is not your production

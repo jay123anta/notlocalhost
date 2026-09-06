@@ -34,15 +34,17 @@ const run = promisify(execFile);
 /**
  * How every command that touches a trust store is run.
  *
- * stdin is closed deliberately. These tools prompt -- for a password, for
- * permission to modify a keychain -- and a prompt with nowhere to appear waits
- * forever, so the command is killed by a timeout and reports no exit code at
- * all. With stdin at end-of-file it fails immediately and says why.
+ * The timeout is short on purpose. These operations take well under a second
+ * when they work, and when they do not they tend not to fail at all: the
+ * platform raises a confirmation dialog and the command waits on it. Thirty
+ * seconds is long enough for any real answer and short enough that a machine
+ * which cannot answer says so quickly.
  *
- * The timeout is short for the same reason: these operations take under a
- * second when they work, so two minutes of waiting only delays a diagnosis.
+ * stdin is left alone. execFile owns the child's streams and depends on them
+ * to know the command finished; overriding stdio here risks a promise that
+ * never settles, which is the failure being guarded against.
  */
-const TRUST_RUN = { timeout: 30_000, stdio: ['ignore', 'pipe', 'pipe'] };
+const TRUST_RUN = { timeout: 30_000 };
 const OS = platform();
 
 /**

@@ -434,7 +434,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        # Linux only, and the reason is worth stating rather than leaving as an
+        # omission someone later "fixes".
+        #
+        # Adding a root to the Windows per-user store, and changing certificate
+        # trust settings on macOS, both raise a confirmation dialog. A hosted
+        # runner has no interactive session for one to appear on, so the
+        # command does not fail -- it waits, and is killed by the timeout.
+        # Observed on both platforms, through two unrelated mechanisms on
+        # Windows: certutil and the .NET X509Store API, each killed by SIGTERM
+        # having printed nothing.
+        #
+        # A job that cannot perform the operation cannot verify it, and a red
+        # tick that means "this environment cannot answer" trains people to
+        # ignore red ticks. Linux uses an NSS database that needs no
+        # confirmation, so it runs the whole cycle for real.
+        os: [ubuntu-latest]
 
     env:
       GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
