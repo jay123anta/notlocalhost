@@ -261,11 +261,26 @@ export async function up(opts = {}) {
   // ---- certificate authority ----------------------------------------------
   // After the proxy, not before. Caddy generates its authority the first time
   // it serves TLS, so there is nothing to install until it is running.
+  let trustSkipped = null;
   if (trust) {
     const certPath = caRootPath(env);
-    const appeared = await waitForFile(certPath, 20_000);
+    // Caddy writes its authority the first time it serves TLS, and how long
+    // that takes depends on the machine -- a cold continuous-integration
+    // runner is slower than a warm laptop by more than a little. Twenty
+    // seconds was enough here and not always enough there, and falling short
+    // does not fail: it skips the install and still reports success, so the
+    // browser then rejects a certificate nobody was told was untrusted.
+    // Waiting longer costs nothing when the file is already present.
+    const appeared = await waitForFile(certPath, 90_000);
     if (!appeared) {
-      log(`no certificate authority appeared at ${certPath}; skipping trust`);
+      // Said where the caller can see it, not only in a log line. `up` is
+      // about to report success, and a run asked to install trust that did
+      // not install it has to say so.
+      log(`no certificate authority appeared at ${certPath} within 90s; trust was not installed`);
+      trustSkipped =
+        `The proxy started, but no certificate authority appeared at ${certPath} within 90 seconds, ` +
+        'so none was installed. HTTPS still works and the browser will warn on every hostname. ' +
+        'Run `notlocalhost down`, then `up` again, or `notlocalhost doctor` to see what this machine reports.';
     } else {
       // Record the intent before acting, not the outcome afterwards.
       //
@@ -288,7 +303,7 @@ export async function up(opts = {}) {
     }
   }
 
-  return { config, state, caddy, caddyfilePath, sites: config.sites, logPath };
+  return { config, state, caddy, caddyfilePath, sites: config.sites, logPath, trustSkipped };
 }
 
 // ---------------------------------------------------------------------- down

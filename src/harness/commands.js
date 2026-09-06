@@ -90,6 +90,12 @@ export async function runHarnessCommand(command, options, io) {
       });
 
       stdout.write(`\n${c.green(c.bold('Up.'))}\n\n`);
+        // A run asked to install trust that could not says so here, beside
+        // the success, rather than in a log line above it that scrolls past.
+        // The proxy is up either way; the browser behaves differently.
+        if (result.trustSkipped) {
+            stdout.write(`  ${c.yellow(result.trustSkipped)}` + String.fromCharCode(10, 10));
+        }
       for (const line of summariseSites(result.config)) stdout.write(`  ${line}\n`);
       stdout.write(`\n  ${c.dim(`proxy log: ${result.logPath}`)}\n`);
       stdout.write(`  ${c.dim('notlocalhost down reverses everything above.')}\n\n`);
