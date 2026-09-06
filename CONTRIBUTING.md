@@ -23,7 +23,6 @@ src/collect/                 parsing and classification; produces no findings
 src/rules/                   findings, one module per area
 src/report/                  terminal, HTML, JSON, markdown
 test/fixtures/lying-app.mjs  every failure this tool detects, in one file
-evidence/                    reproductions of every claim the README makes
 ```
 
 `src/collect/` decides *what is true*. `src/rules/` decides *what to say about
@@ -58,15 +57,13 @@ fastest way for the next person to understand what you found.
 
 ## Verifying claims
 
-Anything the README asserts about browser behaviour must be reproduced in
-`evidence/`:
+Anything the README asserts about browser behaviour must be reproducible
+against a real Chrome, not merely cited. A rule that quotes an RFC and a
+browser that disagrees with it means the browser is right.
 
-```
-npm run evidence
-```
-
-Nine claims, checked against your own browser. If one is refuted on a newer
-Chrome, that is a bug report worth filing on its own.
+If a claim in the README or in `docs/rules.md` turns out to be false on a newer
+Chrome, that is a bug report worth filing on its own -- more valuable than most
+feature requests, because every finding built on it inherits the error.
 
 ## Before opening a pull request
 

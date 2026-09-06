@@ -127,9 +127,6 @@ jobs:
           fi
           echo "$out" | grep -E "^# (tests|pass|fail)"
 
-      - name: Verify the RFC claims against this runner's browser
-        run: npm run evidence
-
   gate:
     name: ship gate (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

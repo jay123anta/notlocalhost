@@ -52,7 +52,7 @@ export const TIERS = {
       'Mixed content actually blocked',
     ],
     cannotGive: [
-      'A parent-domain cookie scope. Nothing can set a cookie that app.x.localhost and api.x.localhost both read -- confirmed against Chrome in evidence/.',
+      'A parent-domain cookie scope. Nothing can set a cookie that app.x.localhost and api.x.localhost both read -- confirmed against Chrome.',
     ],
   },
   test: {

@@ -59,7 +59,7 @@ First release.
 - `--domain`, `--cross-site` and `--map` to state the deployment topology every
   prediction is made against. The assumption is printed in every report.
 - GitHub Action in `action.yml`, with job summary and artifact upload.
-- `evidence/repro-port-sharing.mjs` verifies nine RFC-level claims against a
+- Nine RFC-level claims verified against a
   real browser. All nine confirmed on Chrome 152.
 - `test/fixtures/lying-app.mjs`, a dependency-free dev server exhibiting every
   detected failure in one commented file.

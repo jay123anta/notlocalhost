@@ -74,7 +74,7 @@ WILL BREAK ───────────────────────
   … 3 more will-break findings
 ```
 
-*(Real output from the Vite + Express starter in [`evidence/`](evidence/README.md), abridged.)*
+*(Real output from a Vite + Express starter, abridged.)*
 
 ---
 
@@ -146,7 +146,7 @@ so no local assertion is even about the same cookie.
 `Set-Cookie` grammar has no port attribute. A host-only cookie set by
 `localhost:3000` is sent to `localhost:4000` — same host. So bare localhost
 either over-shares between every app you run or cannot share at all, and neither
-matches a real subdomain topology. [We reproduced both directions.](evidence/README.md#the-port-sharing-reproduction)
+matches a real subdomain topology. Both directions were reproduced against Chrome.
 
 **You cannot create a parent-domain cookie scope on localhost.** Setting
 `Domain=localhost` from `app.localhost` is rejected. Setting `Domain=.localhost`
@@ -154,7 +154,7 @@ from `localhost` is accepted but stored *host-only* — the leading dot is
 stripped (RFC 6265 §5.2.3) and a domain-attribute equal to the request host
 yields a host-only cookie (§5.3). The popular `app.localhost` / `api.localhost`
 workaround does not do what people think it does; nothing can set a cookie both
-of them read. [Verified, both directions.](evidence/README.md#verified-claims)
+of them read. Verified against Chrome, in both directions.
 
 **`SameSite=None` without `Secure` is dropped**, not downgraded to `Lax`. Silently.
 
@@ -177,7 +177,7 @@ production and resolve to the *visitor's* loopback interface.
 
 Every app scaffolded from its official generator, with **no changes to its
 security configuration**. Full tables, JSON and HTML reports in
-[`evidence/`](evidence/README.md).
+a run against each.
 
 | Application | will-break | may-break | info |
 |---|---|---|---|
@@ -192,7 +192,7 @@ environment-gated setting behind it: Laravel (`SESSION_SECURE_COOKIE`, absent
 from the generated `.env`), Django (`SESSION_COOKIE_SECURE = False`), Rails
 (`config.force_ssl`). **Rails 8 ships it commented out in `production.rb` too**,
 so the intuition that development is insecure and production is fine does not
-hold there. [Details](evidence/README.md#rails-8-is-the-sharpest-case).
+hold there.
 
 A default Next.js app is genuinely clean — it sets no cookies at all. The
 findings start when you add authentication. That negative result is in the

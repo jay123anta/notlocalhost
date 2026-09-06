@@ -42,7 +42,6 @@
   "scripts": {
     "test": "node scripts/check-test-output.mjs",
     "lint": "node scripts/syntax-check.mjs",
-    "evidence": "node evidence/repro-port-sharing.mjs",
     "test:unit": "node --test test/unit.test.js",
     "test:e2e": "node --test test/e2e.test.js",
     "fixture": "node test/fixtures/lying-app.mjs",

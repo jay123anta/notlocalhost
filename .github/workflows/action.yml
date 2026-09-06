@@ -107,7 +107,7 @@ jobs:
           NOTLOCALHOST_BROWSER_PATH: ${{ steps.chrome.outputs.chrome-path }}
         with:
           url: http://localhost:3000
-          flow: ./evidence/login-flow.mjs
+          flow: ./scripts/login-flow.mjs
           fail-on: will-break
           domain: acme.com
           artifact-name: action-selftest-report

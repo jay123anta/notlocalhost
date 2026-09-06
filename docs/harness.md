@@ -54,7 +54,7 @@ We verified against Chrome that this **cannot** be done under `.localhost`, in
 either direction: `Domain=localhost` from a subdomain is rejected, and
 `Domain=.localhost` from bare `localhost` is accepted but stored host-only, so
 it reaches nothing new. The reproduction is in
-[`evidence/`](../evidence/README.md#verified-claims).
+Chrome, in both directions.
 
 So the tier choice is really one question: **do you need to see cookies cross
 between subdomains?** If not, take the default and never type a password.

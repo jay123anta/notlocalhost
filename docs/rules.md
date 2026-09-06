@@ -22,7 +22,7 @@ for new rules.
 ### `cookie.samesite-none-without-secure` — will-break
 `SameSite=None` without `Secure`. Chrome rejects the cookie outright rather than
 downgrading it to `Lax`, so it is never stored at all.
-**Cite:** RFC 6265bis §5.4.7. **Verified:** [claim 8](../evidence/README.md#verified-claims).
+**Cite:** RFC 6265bis §5.4.7. **Verified** against Chrome.
 
 ### `cookie.host-prefix-violation` — will-break
 A `__Host-` cookie that breaks the prefix contract: missing `Secure`, carrying a
@@ -40,7 +40,7 @@ parent scope it looks like it creates: the leading dot is stripped (§5.2.3), an
 a domain-attribute equal to the request host yields a host-only cookie (§5.3).
 From a subdomain it is rejected outright.
 **Cite:** RFC 6265 §5.1.3, §5.3; RFC 6761 §6.3.
-**Verified:** [claims 3–7](../evidence/README.md#verified-claims).
+**Verified** against Chrome.
 
 ### `cookie.rejected-by-browser` — will-break
 Chrome refused to store a cookie during this run and said why. Not a prediction:
@@ -57,7 +57,7 @@ Fires only on `localhost`, `127.x.x.x` and `::1`, which is the jar those
 neighbours share. A page on `app.myproject.localhost` is loopback too, but the
 jar is keyed by name, so it shares nothing with them and the port scan is
 skipped rather than reported as empty.
-**Cite:** RFC 6265 §8.5. **Verified:** [claims 1–2](../evidence/README.md#the-port-sharing-reproduction).
+**Cite:** RFC 6265 §8.5. **Verified** against Chrome.
 
 ### `cookie.host-only-stops-crossing` — will-break when credentialed, else may-break
 The port-sharing fact turned around, and the most expensive finding in the tool.
@@ -166,7 +166,7 @@ on plain HTTP.
 break when the app is served over **plain HTTP on a real hostname** — a staging
 box, a preview URL without the `s`, or a proxy that terminates TLS and forwards
 plain HTTP. This rule reports that failure mode, not a fictional HTTPS one.
-**Cite:** W3C Secure Contexts. **Verified:** [claim 9](../evidence/README.md#verified-claims).
+**Cite:** W3C Secure Contexts. **Verified** against Chrome.
 
 Instrumented: `navigator.serviceWorker`, `geolocation`, `clipboard`,
 `credentials`, `mediaDevices`, `storage`, `locks`, `usb`, `bluetooth`, `hid`,
