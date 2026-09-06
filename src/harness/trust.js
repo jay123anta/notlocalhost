@@ -293,10 +293,9 @@ export function removalCommand(os, cert, home = homedir()) {
     //
     // `security delete-certificate` with no keychain searches the user's
     // default search list, which does not include the system keychain the
-    // certificate was added to. So removal found nothing, reported success,
-    // and left the root installed -- on every Mac, every time. CI caught it on
-    // the first run: the store held one more certificate at the end than at
-    // the start.
+    // certificate was added to. Without it removal finds nothing, reports
+    // success, and leaves the root installed -- so the store ends with one
+    // more certificate than it started with.
     return {
       command: 'sudo',
       args: ['security', 'delete-certificate', '-Z', sha1.toUpperCase(), '-t', MACOS_KEYCHAIN],

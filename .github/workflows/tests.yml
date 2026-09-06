@@ -419,20 +419,17 @@ jobs:
           fi
           echo "doctor exited $code"
 
-  # The one thing the suites deliberately never do.
+  # Installing a certificate authority for real, and removing it again.
   #
   # Every lifecycle test passes trust: false, because a test that writes to a
-  # developer's real trust store is not one anybody should run by accident. The
-  # consequence was that the most consequential code here -- the part that puts
-  # a root certificate on a machine -- had only ever been exercised by hand, on
-  # one operating system, by one person.
+  # developer's real trust store is not one anybody should run by accident. A
+  # throwaway runner is the right place to do it properly.
   #
-  # A throwaway runner is the right place to do it for real. The assertion that
-  # matters is not that removal reported success: it is that the store holds
-  # exactly as many roots afterwards as it did before. A removal that deletes
-  # the wrong certificate reports success and fails that count -- and deleting
-  # the wrong certificate is a bug this project has actually shipped, on macOS,
-  # where every Caddy authority shares a subject.
+  # The assertion that matters is not that removal reported success: it is that
+  # the store holds exactly as many roots afterwards as it did before. A removal
+  # that deletes the wrong certificate reports success and fails only that
+  # count, and several authorities can share a subject, so removal by name is
+  # exactly how that happens.
   trust:
     name: trust round trip (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

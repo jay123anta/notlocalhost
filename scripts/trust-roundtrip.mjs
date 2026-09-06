@@ -2,21 +2,19 @@
  * Install a certificate authority, prove it is there, remove it, prove it is
  * gone, and prove the store is exactly the size it started.
  *
- * This is the one thing the test suites deliberately never do. Every lifecycle
- * test passes `trust: false`, because a test that writes to a developer's real
- * trust store is not a test anyone should run by accident. The consequence is
- * that the most consequential code in the project -- the part that puts a root
- * certificate on a machine -- has only ever been exercised by hand, on one
- * operating system.
+ * The test suites never do this. Every lifecycle test passes `trust: false`,
+ * because a test that writes to a developer's real trust store is not one
+ * anybody should run by accident -- which leaves the code that puts a root
+ * certificate on a machine without automated coverage.
  *
- * So this exists as a separate, explicit, opt-in step: safe to run in CI on a
- * throwaway runner, and refusing to run anywhere else without being told twice.
+ * So it is a separate, explicit, opt-in step: safe on a throwaway runner, and
+ * refusing to run anywhere else without being told twice.
  *
  * The assertion that matters is not "removal reported success". It is that the
- * number of roots afterwards equals the number before. A removal that reports
- * success while deleting the wrong certificate passes the first check and
- * fails this one -- and deleting the wrong certificate is a bug this project
- * has actually had, on macOS, where every Caddy authority shares a subject.
+ * number of roots afterwards equals the number before. A removal that deletes
+ * the wrong certificate reports success and fails only this check, and several
+ * authorities can share a subject, so removal by name is exactly how that
+ * happens.
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';

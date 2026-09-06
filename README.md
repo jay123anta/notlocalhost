@@ -468,8 +468,7 @@ for a defect the analyzer already reported.
 
 [**How each category is decided, and what it cannot tell you.**](docs/diff.md)
 
-Not shipped yet. It lives on a branch until its gate passes on Windows, macOS
-and Linux together, and `0.1.1` on npm contains none of it.
+Not in `0.1.1`. The published package is the analyzer only.
 
 ---
 
